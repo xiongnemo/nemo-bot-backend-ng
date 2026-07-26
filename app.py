@@ -1,0 +1,372 @@
+"""
+app.py — The Flask entry point for nemo-bot-backend-ng.
+"""
+
+from __future__ import annotations
+
+import os
+import logging
+import uuid
+from concurrent_log_handler import ConcurrentRotatingFileHandler
+import sys
+
+from flask import Flask, jsonify, request
+
+from core.types import IngestMessage
+from nemollm.registry import init_registry
+from routing import Router, Ruleset
+from runtime.executor import Executor
+from runtime.sender import Sender
+from store.database import Database
+from store.conversation_store import ConversationStore
+from store.message_store import MessageStore
+from store.state_store import StateStore
+from core.feed_service import FeedService
+from agent.tool_registry import ToolRegistry
+from agent.tool_executor import ToolExecutor
+from agent.builtin_tools import register_builtin_tools
+from agent.superuser_tools import register_superuser_tools
+from agent.runner import AgentRunner
+from scheduler.engine import SchedulerEngine
+from scheduler.jobs import register_all_jobs
+import config as app_config
+
+# Create logs directory if it doesn't exist
+os.makedirs("logs", exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s in %(module)s: %(message)s",
+    handlers=[
+        ConcurrentRotatingFileHandler("logs/bot.log", "a", 10 * 1024 * 1024, backupCount=30, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ======================================================================
+# Globals / Dependencies (initialized in setup)
+# ======================================================================
+
+app = Flask(__name__)
+
+db: Database = None
+state_store: StateStore = None
+msg_store: MessageStore = None
+conv_store: ConversationStore = None
+executor: Executor = None
+sender: Sender = None
+feed_service: FeedService = None
+ruleset: Ruleset = None
+router: Router = None
+tool_registry: ToolRegistry = None
+tool_executor: ToolExecutor = None
+agent_runner: AgentRunner = None
+scheduler: SchedulerEngine = None
+
+
+def setup():
+    global db, state_store, msg_store, conv_store, executor, sender, feed_service
+    global ruleset, router, tool_registry, tool_executor, agent_runner, scheduler
+    
+    logger.info("Initializing nemo-bot-backend-ng...")
+
+    # 1. Stores
+    db = Database()
+    state_store = StateStore(db)
+    msg_store = MessageStore(db)
+    conv_store = ConversationStore(db)
+
+    # 2. Runtime
+    executor = Executor(plugin_workers=20, dispatch_workers=8)
+    sender = Sender()
+    
+    feed_service = FeedService(db, sender)
+    
+    from runtime import context
+    context.sender = sender
+    context.state_store = state_store
+    context.db = db
+
+    # 3. LLM
+    init_registry(app_config.backend_config.get("llm", {}))
+
+    # 4. Routing
+    from routing.router import Router
+    from routing.ruleset import Ruleset
+    ruleset = Ruleset()
+    ruleset.load_defaults()
+
+    agent_cfg = app_config.backend_config.get("agent", {})
+    router = Router(
+        ruleset=ruleset,
+        state_store=state_store,
+        bot_names=agent_cfg.get("bot_names", ["nemo"]),
+        trigger_prefixes=agent_cfg.get("trigger_prefixes", ["nemonemo"]),
+    )
+
+    # 5. Scheduler
+    scheduler = SchedulerEngine(db, sender, state_store)
+
+    # 6. Tools
+    from agent.tool_registry import ToolRegistry
+    from agent.tool_executor import ToolExecutor
+    from agent.builtin_tools import register_builtin_tools
+    tool_registry = ToolRegistry()
+    
+    # Set context globals early so scheduler jobs can use them
+    context.executor = executor
+    
+    from agent.superuser_tools import register_superuser_tools
+    register_builtin_tools(tool_registry, msg_store, state_store, scheduler)
+    register_superuser_tools(tool_registry, state_store)
+
+    tool_registry.load_defaults()
+    tool_executor = ToolExecutor(tool_registry, executor, state_store, sender, scheduler)
+    
+    from nemollm.memory import ConversationMemory
+    mem = ConversationMemory(conv_store)
+    agent_cfg = app_config.backend_config.get("agent", {})
+    agent_runner = AgentRunner(
+        memory=mem,
+        state_store=state_store,
+        tool_registry=tool_registry,
+        tool_executor=tool_executor,
+        max_steps=agent_cfg.get("max_steps", 8),
+    )
+    context.agent_runner = agent_runner
+
+    register_all_jobs(scheduler)
+    scheduler.start()
+
+    logger.info("Initialization complete.")
+
+
+# ======================================================================
+# Flask Endpoints (defined at module level so Flask sees them)
+# ======================================================================
+
+@app.route("/ingest", methods=["POST"])
+def ingest():
+    """The unified entry point for all frontends."""
+    payload = request.get_json()
+    if not payload:
+        return jsonify(error="Empty payload"), 400
+
+    # Non-blocking dispatch
+    executor.submit_dispatch(_handle_ingest, payload)
+    return jsonify(status="accepted"), 202
+
+
+@app.route("/bot", methods=["POST"])
+def bot_compat():
+    """Legacy compatibility endpoint."""
+    return ingest()
+
+
+@app.route("/man", methods=["POST"])
+def man_compat():
+    """Legacy man endpoint."""
+    payload = request.get_json()
+    executor.submit_dispatch(_handle_man, payload)
+    return jsonify(status="accepted"), 202
+
+
+@app.route("/explain", methods=["POST"])
+def explain_compat():
+    """Legacy explain endpoint."""
+    payload = request.get_json()
+    executor.submit_dispatch(_handle_explain, payload)
+    return jsonify(status="accepted"), 202
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "ok"})
+
+@app.route('/api/feed', methods=['POST'])
+def receive_feed():
+    """Webhook for external scripts to push feeds."""
+    # Auth
+    valid_tokens = app_config.get_webhook_tokens()
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+    if valid_tokens and token not in valid_tokens:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    payload = request.json
+    if not payload:
+        return jsonify({"error": "Invalid JSON payload"}), 400
+
+    success, msg, status_code = feed_service.handle_incoming_feed(payload)
+    if not success:
+        return jsonify({"error": msg}), status_code
+        
+    return jsonify({"message": msg}), status_code
+
+@app.route('/api/channel', methods=['POST'])
+def create_channel():
+    """API to create a new feed channel."""
+    valid_tokens = app_config.get_webhook_tokens()
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+    if valid_tokens and token not in valid_tokens:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    payload = request.json
+    channel_name = payload.get("name")
+    description = payload.get("description", "")
+    if not channel_name:
+        return jsonify({"error": "Missing channel 'name'"}), 400
+
+    try:
+        conn = db.get_conn()
+        conn.execute("INSERT INTO channels (name, description) VALUES (?, ?)", (channel_name, description))
+        conn.commit()
+        return jsonify({"message": f"Channel '{channel_name}' created successfully."}), 201
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            return jsonify({"error": f"Channel '{channel_name}' already exists."}), 409
+        return jsonify({"error": str(e)}), 500
+
+
+# ======================================================================
+# Dispatch Workers
+# ======================================================================
+
+def _handle_ingest(payload: dict):
+    try:
+        msg = IngestMessage.from_dict(payload)
+        msg_store.ingest(
+            frontend=msg.frontend, group_id=msg.group_id, user_id=msg.user_id,
+            user_name=msg.user_name, text=msg.text, message_id=msg.message_id,
+            ated=msg.ated, imgs=msg.imgs, raw_message=msg.raw_message, timestamp=msg.timestamp
+        )
+
+        route = router.route(msg)
+        logger.info("Routed message to: %s", route.mode)
+
+        from core.message import Message
+        raw_msg = Message(payload)
+
+        # --- ACL Logic Start ---
+        from config import is_superuser, get_platform, get_rejection_phrases
+        import random
+        
+        platform = get_platform(msg.frontend)
+        link_key = f"{platform}:{msg.user_id}"
+        primary_uid = state_store.get("user_link", "global", link_key, default=msg.user_id)
+        
+        is_su = is_superuser(msg.frontend, msg.user_id)
+        
+        if not is_su and route.mode in ["command", "agent"]:
+            global_blacklist = state_store.get("acl", "global", "blacklist", default=[])
+            target_user = f"user_{primary_uid}"
+            target_group = f"group_{msg.group_id}" if msg.group_id else None
+            
+            if target_user in global_blacklist or (target_group and target_group in global_blacklist):
+                logger.info("User %s (or group) is globally blacklisted.", target_user)
+                if route.mode == "agent":
+                    phrases = get_rejection_phrases()
+                    rejection = random.choice(phrases) if phrases else "Nemo 并不是很想跟你讲话。"
+                    from core.types import Action
+                    sender.deliver_actions(payload, [Action(kind="reply", text=rejection)])
+                return
+                
+            if route.mode in ["command", "agent"]:
+                plugin_name = route.plugin if route.mode == "command" else "agent"
+                
+                whitelist = state_store.get("acl", f"plugin_{plugin_name}", "whitelist", default=[])
+                blacklist = state_store.get("acl", f"plugin_{plugin_name}", "blacklist", default=[])
+                
+                if whitelist and blacklist:
+                    logger.error("Plugin/Agent %s has BOTH whitelist and blacklist. Rejecting.", plugin_name)
+                    return
+                    
+                allowed = True
+                if whitelist:
+                    allowed = target_user in whitelist or (target_group and target_group in whitelist)
+                elif blacklist:
+                    allowed = target_user not in blacklist and (not target_group or target_group not in blacklist)
+                    
+                if not allowed:
+                    logger.info("User %s is unauthorized for %s. Silently dropping.", target_user, plugin_name)
+                    return
+        # --- ACL Logic End ---
+
+        if route.mode == "command":
+            _execute_command(raw_msg, route)
+        elif route.mode == "agent":
+            run_id = uuid.uuid4().hex[:6]
+            def observer_callback(actions):
+                sender.deliver_actions(payload, actions)
+            
+            actions = agent_runner.run(raw_msg, route.query, run_id=run_id, observer=observer_callback)
+            sender.deliver_actions(payload, actions)
+        elif route.mode == "man":
+            _execute_man(payload)
+        elif route.mode == "explain":
+            _execute_explain(payload)
+        elif route.mode == "silent":
+            pass
+
+    except Exception as e:
+        logger.exception("Error in dispatch worker")
+        try:
+            from core.types import Action
+            sender.deliver_actions(payload, [Action(kind="reply", text=f"500: nemo: 内部错误 (Internal Server Error) - {str(e)}")])
+        except Exception as inner_e:
+            logger.error("Failed to send error message back: %s", inner_e)
+
+
+def _execute_command(msg, route):
+    config = state_store.get_plugin_config(route.plugin)
+    
+    # We mutate the MessageRequest args for the plugin to see exactly what matched
+    msg_dict = msg.to_dict()
+    msg_dict["request"]["args"] = route.args
+    msg_dict["request"]["command"] = route.plugin
+    
+    result = executor.run_plugin_sync(msg_dict, route.plugin, config)
+    sender.deliver(msg_dict, result)
+    
+    if result.get("config") and result["config"] != config:
+        state_store.set_plugin_config(route.plugin, result["config"])
+
+
+def _handle_man(payload: dict):
+    # Ported from old backend if needed, or implement as a plugin/agent tool
+    logger.info("man endpoint called (not fully implemented yet)")
+
+def _handle_explain(payload: dict):
+    logger.info("explain endpoint called (not fully implemented yet)")
+
+
+# ======================================================================
+# Main Entry Point
+# ======================================================================
+
+if __name__ == "__main__":
+    import multiprocessing
+    import sys
+    multiprocessing.freeze_support()  # Required for Windows ProcessPoolExecutor
+
+    setup()
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--check":
+        logger.info("Initialization check passed successfully!")
+        print("OK")
+        sys.exit(0)
+
+    import atexit
+    @atexit.register
+    def cleanup():
+        logger.info("Shutting down...")
+        scheduler.shutdown()
+        executor.shutdown()
+
+    server_cfg = app_config.backend_config.get("server", {})
+    app.run(
+        host=server_cfg.get("host", "0.0.0.0"),
+        port=server_cfg.get("port", 42164),
+    )
+

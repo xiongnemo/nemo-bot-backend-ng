@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Configs & Secrets
+config.yml
+config.yaml
+config.json
+config_*.yml
+.env
+.env.*
+secrets.*
+
+# Data & Logs & Assets
+data/
+logs/
+assets/
+downloads/
+*.log
+*.db
+*.sqlite
+*.sqlite-journal
+*.rocksdb
+*.lock
+
+# Temporary Test Files & Outputs
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+test.html
+scratch/
+
+# IDE & OS
+.idea/
+.vscode/
+.agents/
+.gemini/
+.DS_Store
+Thumbs.db
