@@ -22,6 +22,36 @@ from .tool_registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Ensure tool calls and tool responses are properly paired and valid."""
+    cleaned = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg.role == "tool":
+            i += 1
+            continue
+        elif msg.role == "assistant" and msg.tool_calls:
+            tool_msgs = []
+            j = i + 1
+            while j < len(messages) and messages[j].role == "tool":
+                tool_msgs.append(messages[j])
+                j += 1
+            expected_ids = {tc.id for tc in msg.tool_calls if tc.id}
+            found_ids = {tm.tool_call_id for tm in tool_msgs if tm.tool_call_id}
+            if expected_ids and not expected_ids.issubset(found_ids):
+                if msg.content:
+                    cleaned.append(ChatMessage(role="assistant", content=msg.content))
+            else:
+                cleaned.append(msg)
+                cleaned.extend(tool_msgs)
+            i = j
+        else:
+            cleaned.append(msg)
+            i += 1
+    return cleaned
+
+
 class AgentRunner:
     def __init__(
         self,
@@ -87,6 +117,7 @@ class AgentRunner:
                 name=meta.get("name")
             ))
             
+        messages = _sanitize_messages(messages)
         img_str = ""
         if message.request.imgs:
             urls = "\n".join([f"[附图/Image Attached]: {url}" for url in message.request.imgs])

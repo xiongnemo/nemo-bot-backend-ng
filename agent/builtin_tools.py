@@ -152,10 +152,18 @@ def forget_fact_executor(args: dict, msg: Message, store: StateStore) -> dict:
         return {"result": f"已成功从长期记忆 ({scope_type}) 中删除: {fact}"}
     return {"result": f"找不到该事实，无法删除 ({scope_type})。请确保精确匹配。"}
 
-def think_executor(args: dict, msg: Message, sender: Sender = None) -> dict:
+def think_executor(args: dict, msg: Message, sender: Sender = None, state_store: StateStore = None) -> dict:
     thought = args.get("thought", "")
-    if sender:
-        sender.send_text(msg.to_dict(), f"202: nemo: {thought}", reply=True)
+    if sender and state_store:
+        try:
+            gid = msg.context.group_id
+            uid = msg.context.user_id
+            scope_key = f"agent:{msg.frontend}:group:{gid}" if gid else f"agent:{msg.frontend}:dm:{uid}"
+            verbose_level = state_store.get("agent", "verbose_level", scope_key, default=0)
+            if verbose_level >= 1:
+                sender.send_text(msg.to_dict(), f"202: nemo: {thought}", reply=True)
+        except Exception:
+            pass
     return {"result": f"思考已记录 (Length: {len(thought)} chars)。"}
 
 SEND_MESSAGE_DEF = ToolDefinition(
@@ -927,10 +935,12 @@ def register_builtin_tools(registry, message_store: MessageStore, state_store: S
         lambda args, msg, sender: forget_fact_executor(args, msg, state_store),
     )
     
-    registry.register_builtin(
-        THINK_DEF,
-        lambda args, msg, sender: think_executor(args, msg, sender),
-    )
+    from config import backend_config
+    if not backend_config.get("agent", {}).get("disable_think_tool", False):
+        registry.register_builtin(
+            THINK_DEF,
+            lambda args, msg, sender: think_executor(args, msg, sender, state_store),
+        )
     
     registry.register_builtin(
         SEND_MESSAGE_DEF,

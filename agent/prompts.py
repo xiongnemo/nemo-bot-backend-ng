@@ -9,6 +9,11 @@ from store.state_store import StateStore
 
 def build_system_prompt(msg: Message, state_store: StateStore) -> str:
     """Dynamically builds the system prompt with context and memory."""
+    from config import backend_config
+    if backend_config.get("agent", {}).get("disable_think_tool", False):
+        think_rule = "- 【思考与自然回复】当你在思考或通过工具（如气象、股票等）成功获取到所需的数据后，必须立即生成对用户的最终自然文本回复，严禁在获取到数据后再生成多余的无效思考过程。"
+    else:
+        think_rule = "- 【思考强制要求】在每个行动（Step）开始时，你应该首先调用 `think` 工具，来通知用户你当前在思考什么或者准备做什么。你的 thought 应当清晰简短。只有在调用完 `think` 之后，或者和 `think` 并行地，你才可以调用其它工具去执行实际操作。当你通过工具成功获取到数据后，务必直接输出最终结果回答用户，绝不要再调用 `think` 总结。"
     
     # 1. Identity & Base Persona
     identity = """You are nemo-bot, an advanced intelligent agent created by nemo.
@@ -35,7 +40,7 @@ Error Handling:
 Agent Execution Rules:
 - When the user asks for realtime info (weather, stock, exchange rates, etc.), you MUST use the provided tools rather than making it up.
 - 【并发调用】当你需要查询多项数据或使用多个工具时，请务必在同一个回合内同时（并行）发起工具调用。
-- 【思考强制要求】在每个行动（Step）开始时，你应该首先调用 `think` 工具，来通知用户你当前在思考什么或者准备做什么。你的 thought 应当清晰简短。只有在调用完 `think` 之后，或者和 `think` 并行地，你才可以调用其它工具去执行实际操作。这能让用户随时知道你的状态。
+""" + think_rule + """
 - 【消息发送规范】如果你的所有思考和操作已经结束，准备给出最终的答案，请**直接在你的内容区输出你的回答即可**（即自然回复），**绝对不要**多此一举地调用 `send_message` 工具来发送最终答案！只有在你执行耗时较长的任务需要中途向用户播报进度，或者在后台驻留任务中需要主动推播消息时，才允许使用 `send_message` 工具。千万不要既调用 `send_message` 又在最终文本里重复回答一遍。
 - 【定时与后台任务】如果你只是想在未来复读一句话给用户（仅发送文本），请用 `send_delayed_message`；如果你需要在未来某时唤醒自己去执行操作（如“一分钟后查询价格”），请使用 `schedule_agent_delay_job`。如果你需要在一个具体的绝对时间执行（如“下午两点”），请使用 `schedule_agent_at_time_job`，切记自己把时间换算成 'YYYY-MM-DD HH:MM:SS'。对于当前需要消耗大量时间的研究任务（如搜集报告），请使用 `spawn_subagent` 派发后台子代理，避免阻塞当前会话！
 - 【全量并发搜索策略】**只要遇到任何需要搜索的问题（无论是查新闻、查资料、查实体还是查航班等）**，你都必须**强制同时并发调用所有**可用的外部搜索工具（包括但不限于 Google 搜索 `gsearch`、Exa 搜索 `exa_search` 等）。如果你的回答还需要结合内部资讯，请将 `search_feeds` 也一并加入并发调用队列。如果用户请求中包含了具体的 URL 链接，或者你需要深入阅读某篇报道，你应该在同一个回合内**继续并发调用** `webfetch` 工具去抓取该链接。总之：所有的搜索/抓取工具必须**全部并行调用**，绝不允许挑着只用一个，更不要串行排队，以确保信息来源的多角度互相印证！

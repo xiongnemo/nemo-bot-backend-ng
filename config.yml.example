@@ -11,6 +11,7 @@ storage:
   rocksdb_path: "data/nemo_rocksdb"
 
 agent:
+  disable_think_tool: true  # 禁用内部思考(think)工具，避免产生多余轮次和废话
   bot_names:
   - nemo
   - nemo-bot
