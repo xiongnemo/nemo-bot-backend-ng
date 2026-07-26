@@ -22,6 +22,7 @@ class ZmqStateStore:
         self.endpoint = endpoint
         self._context = zmq.Context.instance()
         self._local = threading.local()
+        self._is_zmq_client = True
 
     def _get_socket(self) -> zmq.Socket:
         if not hasattr(self._local, "socket") or self._local.socket is None:

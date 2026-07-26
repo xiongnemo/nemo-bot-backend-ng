@@ -17,6 +17,7 @@ from typing import Any
 import zmq
 
 from .database import Database
+from .engines.base import BaseKVEngine
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,21 @@ class KVStorageDaemon:
         endpoint: str = "inproc://nemo-kv",
         db: Database | None = None,
         max_cache_size: int = 1000,
+        engine: BaseKVEngine | None = None,
+        backend: str = "sqlite",
+        rocksdb_path: str = "data/nemo_rocksdb",
     ):
         self.endpoint = endpoint
         self.db = db or Database()
         self.max_cache_size = max_cache_size
+        if engine is not None:
+            self.engine = engine
+        elif backend == "rocksdb":
+            from .engines.rocksdb_engine import RocksDBEngine
+            self.engine = RocksDBEngine(path=rocksdb_path)
+        else:
+            from .engines.sqlite_engine import SqliteKVEngine
+            self.engine = SqliteKVEngine(db=self.db)
         self._cache: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
         self._running = False
         self._thread: threading.Thread | None = None
@@ -85,6 +97,8 @@ class KVStorageDaemon:
         try:
             if self._socket:
                 self._socket.close(linger=0)
+            if hasattr(self, "engine") and self.engine:
+                self.engine.close()
         except Exception as e:
             logger.warning("Error during ZMQ cleanup: %s", e)
 
@@ -118,7 +132,7 @@ class KVStorageDaemon:
             return {"status": "error", "message": f"Unknown command: {cmd}"}
 
     # ------------------------------------------------------------------
-    # Internal CRUD with LRU Cache & SQLite Backend
+    # Internal CRUD with LRU Cache & Abstract Engine Backend
     # ------------------------------------------------------------------
 
     def _get(self, namespace: str, scope: str, key: str, default: Any = None) -> Any:
@@ -128,35 +142,17 @@ class KVStorageDaemon:
                 self._cache.move_to_end(cache_key)
                 return self._cache[cache_key]
 
-        conn = self.db.get_conn()
-        row = conn.execute(
-            "SELECT value_json FROM kv WHERE namespace=? AND scope=? AND key=?",
-            (namespace, scope, key),
-        ).fetchone()
-
-        if row is None:
-            return default
-
-        val = json.loads(row[0])
-        with self._lock:
-            self._cache[cache_key] = val
-            self._cache.move_to_end(cache_key)
-            if len(self._cache) > self.max_cache_size:
-                self._cache.popitem(last=False)
+        val = self.engine.get(namespace, scope, key, default)
+        if val is not default:
+            with self._lock:
+                self._cache[cache_key] = val
+                self._cache.move_to_end(cache_key)
+                if len(self._cache) > self.max_cache_size:
+                    self._cache.popitem(last=False)
         return val
 
     def _set(self, namespace: str, scope: str, key: str, value: Any) -> None:
-        conn = self.db.get_conn()
-        conn.execute(
-            """INSERT INTO kv (namespace, scope, key, value_json, updated_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(namespace, scope, key)
-               DO UPDATE SET value_json=excluded.value_json,
-                             updated_at=excluded.updated_at""",
-            (namespace, scope, key, json.dumps(value, ensure_ascii=False), time.time()),
-        )
-        conn.commit()
-
+        self.engine.set(namespace, scope, key, value)
         cache_key = (namespace, scope, key)
         with self._lock:
             self._cache[cache_key] = value
@@ -165,32 +161,15 @@ class KVStorageDaemon:
                 self._cache.popitem(last=False)
 
     def _delete(self, namespace: str, scope: str, key: str) -> bool:
-        conn = self.db.get_conn()
-        cur = conn.execute(
-            "DELETE FROM kv WHERE namespace=? AND scope=? AND key=?",
-            (namespace, scope, key),
-        )
-        conn.commit()
-
+        deleted = self.engine.delete(namespace, scope, key)
         cache_key = (namespace, scope, key)
         with self._lock:
             if cache_key in self._cache:
                 del self._cache[cache_key]
-
-        return cur.rowcount > 0
+        return deleted
 
     def _list_keys(self, namespace: str, scope: str = "global") -> list[str]:
-        conn = self.db.get_conn()
-        rows = conn.execute(
-            "SELECT key FROM kv WHERE namespace=? AND scope=? ORDER BY key",
-            (namespace, scope),
-        ).fetchall()
-        return [r[0] for r in rows]
+        return self.engine.list_keys(namespace, scope)
 
     def _list_all(self, namespace: str, scope: str = "global") -> dict[str, Any]:
-        conn = self.db.get_conn()
-        rows = conn.execute(
-            "SELECT key, value_json FROM kv WHERE namespace=? AND scope=?",
-            (namespace, scope),
-        ).fetchall()
-        return {r[0]: json.loads(r[1]) for r in rows}
+        return self.engine.list_all(namespace, scope)

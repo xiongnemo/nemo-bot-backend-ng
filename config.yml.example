@@ -1,0 +1,70 @@
+# ======================================================================
+# Storage Configuration (ZeroMQ KV Storage Daemon & Engine Selection)
+# ======================================================================
+# 默认使用内存通信 (inproc://nemo-kv)，有效避免跨线程/跨进程 SQLite 锁冲突。
+# 也可以配置为 TCP socket (例如 tcp://127.0.0.1:5555) 供跨进程或跨服务器访问。
+# backend 支持: "sqlite" (默认兼容模式) 或 "rocksdb" (LSM-Tree 高性能存储，基于 rocksdict whl)。
+storage:
+  enabled: true
+  backend: "rocksdb"
+  endpoint: "inproc://nemo-kv"
+  rocksdb_path: "data/nemo_rocksdb"
+
+agent:
+  bot_names:
+  - nemo
+  - nemo-bot
+  max_steps: 100
+  trigger_prefixes:
+  - nemonemo
+  webhook_tokens:
+  - "secret_token_123"
+
+llm:
+  timeout: 300  # 全局请求超时时间（秒），防止长思考断开
+  gatekeeper_model: nemo-axonhub-gemini:gemini-3.5-flash-lite
+  reflection_model: nemo-axonhub-gemini:gemini-3.5-flash-lite
+  vision_model: nemo-axonhub-openai:mimo-v2.5
+  models:
+  - nemo-axonhub-openai:mimo-v2.5-pro
+  - nemo-axonhub-openai:gpt-5.6-sol
+  - nemo-axonhub-openai:gpt-oss-120b
+  - nemo-axonhub-gemini:gemini-3.5-flash-lite
+  - nemo-axonhub-openai:glm-5.2
+  - nemo-axonhub-openai:deepseek-v4-pro
+  providers:
+    nemo-axonhub-anthropic:
+      api_key: 'your_api_key_here'
+      base_url: http://192.168.1.200:8090/anthropic
+      type: anthropic
+    nemo-axonhub-gemini:
+      api_key: 'your_api_key_here'
+      base_url: http://192.168.1.200:8090/gemini
+      type: gemini
+    nemo-axonhub-openai:
+      api_key: 'your_api_key_here'
+      base_url: http://192.168.1.200:8090/v1
+      type: openai
+
+message_backend:
+  console:
+    endpoint: http://127.0.0.1:42165/receive
+    superusers:
+    - '123456789'
+  cqhttp:
+    endpoint: http://127.0.0.1:5700
+    superusers:
+    - '123456789'
+
+plugins: {}
+
+acl:
+  rejection_phrases:
+    - "Nemo 并不是很想跟你讲话。"
+    - "（系统提示）权限不足，您的消息已被丢弃。"
+    - "对方拒绝了你的消息。"
+    - "（已读）"
+
+server:
+  host: 0.0.0.0
+  port: 42164

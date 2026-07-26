@@ -105,6 +105,31 @@ class TestZmqStorage(unittest.TestCase):
             client.close()
             daemon.stop()
 
+    def test_zmq_rocksdb_backend(self):
+        endpoint = "inproc://test-zmq-rocksdb"
+        rdb_path = "data/test_zmq_rdb"
+        import shutil
+        shutil.rmtree(rdb_path, ignore_errors=True)
+
+        daemon = KVStorageDaemon(endpoint=endpoint, backend="rocksdb", rocksdb_path=rdb_path)
+        daemon.start(background=True)
+        time.sleep(0.2)
+
+        client = ZmqStateStore(endpoint=endpoint)
+        try:
+            self.assertTrue(client.ping())
+            client.set("plugin", "vision", "api_key", "secret-key")
+            self.assertEqual(client.get("plugin", "vision", "api_key"), "secret-key")
+            self.assertEqual(client.list_keys("plugin", "vision"), ["api_key"])
+            self.assertTrue(client.delete("plugin", "vision", "api_key"))
+            self.assertIsNone(client.get("plugin", "vision", "api_key"))
+        finally:
+            client.close()
+            daemon.stop()
+            if hasattr(daemon, "engine") and hasattr(daemon.engine, "destroy"):
+                daemon.engine.destroy()
+            shutil.rmtree(rdb_path, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,15 @@ class StateStore:
     def __init__(self, db: Database):
         self.db = db
 
+    def _get_delegate(self) -> Any:
+        try:
+            from runtime import context
+            if getattr(context, "state_store", None) is not None and getattr(context.state_store, "_is_zmq_client", False):
+                return context.state_store
+        except Exception:
+            pass
+        return None
+
     # ------------------------------------------------------------------
     # Core CRUD
     # ------------------------------------------------------------------
@@ -32,6 +41,9 @@ class StateStore:
         key: str,
         default: Any = None,
     ) -> Any:
+        delegate = self._get_delegate()
+        if delegate is not None:
+            return delegate.get(namespace, scope, key, default)
         conn = self.db.get_conn()
         row = conn.execute(
             "SELECT value_json FROM kv WHERE namespace=? AND scope=? AND key=?",
@@ -48,6 +60,9 @@ class StateStore:
         key: str,
         value: Any,
     ) -> None:
+        delegate = self._get_delegate()
+        if delegate is not None:
+            return delegate.set(namespace, scope, key, value)
         conn = self.db.get_conn()
         conn.execute(
             """INSERT INTO kv (namespace, scope, key, value_json, updated_at)
@@ -65,6 +80,9 @@ class StateStore:
         scope: str,
         key: str,
     ) -> bool:
+        delegate = self._get_delegate()
+        if delegate is not None:
+            return delegate.delete(namespace, scope, key)
         conn = self.db.get_conn()
         cur = conn.execute(
             "DELETE FROM kv WHERE namespace=? AND scope=? AND key=?",
@@ -78,6 +96,9 @@ class StateStore:
         namespace: str,
         scope: str = "global",
     ) -> list[str]:
+        delegate = self._get_delegate()
+        if delegate is not None:
+            return delegate.list_keys(namespace, scope)
         conn = self.db.get_conn()
         rows = conn.execute(
             "SELECT key FROM kv WHERE namespace=? AND scope=? ORDER BY key",
@@ -90,6 +111,9 @@ class StateStore:
         namespace: str,
         scope: str = "global",
     ) -> dict[str, Any]:
+        delegate = self._get_delegate()
+        if delegate is not None:
+            return delegate.list_all(namespace, scope)
         conn = self.db.get_conn()
         rows = conn.execute(
             "SELECT key, value_json FROM kv WHERE namespace=? AND scope=?",
