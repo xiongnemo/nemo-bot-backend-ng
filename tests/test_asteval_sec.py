@@ -1,14 +1,19 @@
+import unittest
 from asteval import Interpreter
 
-aeval = Interpreter()
 
-def test(code):
-    res = aeval(code)
-    err = aeval.error
-    if err:
-        print(f"[{code}] ERROR:", err)
-    else:
-        print(f"[{code}] SUCCESS:", res)
+class TestAstevalSecurity(unittest.TestCase):
+    def setUp(self):
+        self.aeval = Interpreter()
 
-test("''.__class__")
-test("().__class__.__bases__[0].__subclasses__()")
+    def test_class_access_blocked(self):
+        self.aeval("''.__class__")
+        self.assertGreater(len(self.aeval.error), 0)
+
+    def test_subclasses_access_blocked(self):
+        self.aeval("().__class__.__bases__[0].__subclasses__()")
+        self.assertGreater(len(self.aeval.error), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
