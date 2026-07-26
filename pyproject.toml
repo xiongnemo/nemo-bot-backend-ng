@@ -19,6 +19,7 @@ dependencies = [
     "dnspython>=2.4",
     "mdit-py-plugins>=0.4.0",
     "emoji>=2.0",
+    "pyzmq>=25.0",
 ]
 
 [dependency-groups]
