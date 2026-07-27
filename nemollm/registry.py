@@ -23,6 +23,7 @@ class ModelRegistry:
         self.config = config
         self.providers: dict[str, BaseLLMClient] = {}
         self.fallback_models: list[str] = config.get("models", [])
+        self._active_index: int = 0
         
         # Backward compatibility for old config
         if not self.fallback_models and "default_model" in config:
@@ -79,7 +80,30 @@ class ModelRegistry:
         if not models:
             raise ValueError("No valid fallback models could be resolved from config.")
             
+        if getattr(self, "_active_index", 0) > 0 and self._active_index < len(models):
+            models = models[self._active_index:] + models[:self._active_index]
+            
         return models
+
+    def report_success(self, client: BaseLLMClient, actual_model: str) -> None:
+        """Report that a model call succeeded, promoting it to be tried first in subsequent calls."""
+        models = []
+        for model_id in self.fallback_models:
+            parts = model_id.split(":", 1)
+            if len(parts) == 2:
+                provider_name, mod = parts
+            else:
+                provider_name, mod = "openai", model_id
+            c = self.providers.get(provider_name)
+            if c:
+                models.append((c, mod))
+                
+        for idx, (c, m) in enumerate(models):
+            if c == client and m == actual_model:
+                if getattr(self, "_active_index", 0) != idx:
+                    logger.info(f"Promoting fallback model '{m}' (index {idx}) to primary try for next turn.")
+                    self._active_index = idx
+                break
 
     def get_client(self, model_id: str) -> Tuple[BaseLLMClient, str]:
         """Resolve a specific model_id (provider:model) to a client and actual model string."""

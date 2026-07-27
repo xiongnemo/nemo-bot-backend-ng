@@ -139,7 +139,6 @@ class AgentRunner:
         
         from nemollm.registry import get_registry
         registry = get_registry()
-        fallback_models = registry.get_models()
         
         # 2. Build dynamic system prompt
         system_prompt = build_system_prompt(message, self.state_store)
@@ -158,7 +157,7 @@ class AgentRunner:
 
             resp = None
             last_err = None
-            for client, actual_model in fallback_models:
+            for client, actual_model in registry.get_models():
                 logger.info("Agent Step %d: calling LLM (model: %s)...", step + 1, actual_model)
                 try:
                     resp = client.chat(
@@ -167,6 +166,7 @@ class AgentRunner:
                         system=system_prompt,
                         tools=tools,
                     )
+                    registry.report_success(client, actual_model)
                     break  # Success!
                 except Exception as e:
                     logger.warning("Model %s failed: %s", actual_model, e)

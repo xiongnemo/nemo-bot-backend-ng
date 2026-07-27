@@ -10,9 +10,10 @@ import json
 import logging
 from typing import Any
 
-from config import backend_config
+from config import backend_config, is_superuser
 from core.message import Message
 from store.state_store import StateStore
+from utilities import generic_exception_handler
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ _parameters = {
 }
 _enabled = 1
 
+@generic_exception_handler
 def bot_execute(message: Message, config: dict) -> None:
     from store.database import Database
     db = Database(backend_config.get("database", {}).get("path", "data/bot.db"))
@@ -58,6 +60,11 @@ def bot_execute(message: Message, config: dict) -> None:
 
     action = args.get("action")
     target = args.get("target")
+
+    if action in ["memorize", "forget"] and target == "group":
+        if not is_superuser(message.frontend, message.context.user_id):
+            message.reply("401: nemo: 权限不足！修改或遗忘群组公共记忆（group）属于管理员敏感操作，普通用户无权操作。")
+            return
 
     if target == "group":
         if not message.context.group_id:
