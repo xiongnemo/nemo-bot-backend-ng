@@ -19,7 +19,7 @@ from utilities import generic_exception_handler
 logger = logging.getLogger(__name__)
 
 _name = "加密货币趋势分析"
-_command = ["crypto_trend", "trend"]
+_command = ["crypto_trend", "trend", "画线"]
 _man = "用法: crypto_trend <交易对> [周期]。支持周期: 5m, 15m, 30m, 1h, 4h, 1d, 1w。示例: crypto_trend BTCUSDT 4h"
 _tool_description = "获取加密货币(Gate永续合约)近期K线图及技术指标摘要。此工具专门用于视觉+文本多模态分析，返回结果包含一个 JSON payload 和本地图表路径。图中要素包含：1. 主图 K 线，带红色的 EMA12 均线，以及由 EMA144(橙) 和 EMA169(蓝) 构成的 Vegas 隧道。2. 主图上可能标注高价值交易信号：绿色向上箭头(^)=真突破或假跌破(看涨)，红色向下箭头(v)=真跌破或假突破(看跌)，橙色/紫色箭头=隧道支撑/阻力反弹。3. 中部副图为成交量。4. 底部副图为 MACD 及其红绿动能柱。大语言模型应结合图片视觉信号与文本摘要做综合研判。"
 _enabled = 1
