@@ -72,10 +72,13 @@ def setup():
     
     logger.info("Initializing nemo-bot-backend-ng...")
 
+    import sys
+    is_check_mode = len(sys.argv) > 1 and sys.argv[1] == "--check"
+
     # 1. Stores
     db = Database()
     storage_cfg = app_config.backend_config.get("storage", {})
-    if storage_cfg.get("enabled", False):
+    if storage_cfg.get("enabled", False) and not is_check_mode:
         from store.zmq_daemon import KVStorageDaemon
         from store.zmq_client import ZmqStateStore
         endpoint = storage_cfg.get("endpoint", "inproc://nemo-kv")
@@ -332,9 +335,9 @@ def _handle_ingest(payload: dict):
             actions = agent_runner.run(raw_msg, agent_query, run_id=run_id, observer=observer_callback)
             sender.deliver_actions(payload, actions)
         elif route.mode == "man":
-            _execute_man(payload)
+            _handle_man(payload, route)
         elif route.mode == "explain":
-            _execute_explain(payload)
+            _handle_explain(payload, route)
         elif route.mode == "silent":
             pass
 
@@ -362,12 +365,59 @@ def _execute_command(msg, route):
         state_store.set_plugin_config(route.plugin, result["config"])
 
 
-def _handle_man(payload: dict):
-    # Ported from old backend if needed, or implement as a plugin/agent tool
-    logger.info("man endpoint called (not fully implemented yet)")
+def _handle_man(payload: dict, route):
+    import importlib
+    from plugins import plugin_names
+    
+    args = getattr(route, "args", "").strip()
+    msg = IngestMessage.from_dict(payload)
+    reply_text = ""
+    
+    if not args:
+        reply_text = "nemo-bot 操作手册实用程序。\n以下是 [该插件所有可能的指令] 和 [该插件简介] 。\n"
+        for module_name in plugin_names:
+            try:
+                mod = importlib.import_module(f"plugins.{module_name}")
+                cmds = getattr(mod, "_command", [])
+                name = getattr(mod, "_name", module_name)
+                if cmds:
+                    reply_text += f"{' '.join(cmds)} ({module_name}): {name}\n"
+            except Exception:
+                continue
+        reply_text += "使用 man [该插件可能的指令] 来查看对应插件的操作手册。"
+    else:
+        found_mod = None
+        for module_name in plugin_names:
+            try:
+                mod = importlib.import_module(f"plugins.{module_name}")
+                cmds = getattr(mod, "_command", [])
+                if args in cmds:
+                    found_mod = mod
+                    break
+            except Exception:
+                continue
+        if found_mod:
+            name = getattr(found_mod, "_name", args)
+            man_text = getattr(found_mod, "_man", "该指令未提供手册。")
+            reply_text = f"nemo-bot 操作手册实用程序。\n{name}\n{man_text}"
+        else:
+            reply_text = "未找到该指令对应的手册，可以使用 EXPLAIN 指令来进行诊断。"
+            
+    from core.types import Action
+    sender.deliver_actions(payload, [Action(kind="reply", text=reply_text)])
 
-def _handle_explain(payload: dict):
-    logger.info("explain endpoint called (not fully implemented yet)")
+def _handle_explain(payload: dict, route):
+    msg = IngestMessage.from_dict(payload)
+    args = getattr(route, "args", "")
+    
+    reply_text = (
+        f"nemo-bot EXPLAIN 和诊断实用程序。\n"
+        f"你当前解析出的指令为: {route.mode if route.mode else '未知'}\n"
+        f"你当前提供的参数为: {args}\n"
+        f"你的 ID 是: {msg.user_id} {'，当前在群组 ID ' + str(msg.group_id) + ' 中' if msg.group_id else ''}"
+    )
+    from core.types import Action
+    sender.deliver_actions(payload, [Action(kind="reply", text=reply_text)])
 
 
 # ======================================================================
