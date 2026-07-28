@@ -62,9 +62,9 @@ def run_reflection_job():
     
     for scope in active_scopes:
         logger.info("[Reflection] Processing scope: %s", scope)
-        # Fetch up to 100 recent messages for this scope
+        # Fetch all recent messages for this scope
         cur = conn.execute(
-            "SELECT role, content FROM conversations WHERE scope_key = ? AND created_at > ? ORDER BY created_at ASC LIMIT 100",
+            "SELECT role, content FROM conversations WHERE scope_key = ? AND created_at > ? ORDER BY created_at ASC",
             (scope, cutoff)
         )
         msgs = cur.fetchall()
@@ -73,76 +73,88 @@ def run_reflection_job():
             logger.info("[Reflection] Skipping scope %s, too few messages (%d).", scope, len(msgs))
             continue
             
-        chat_log = []
-        for r in msgs:
-            role = r["role"]
-            content = r["content"]
-            # Exclude massive system outputs or tool dumps if any were missed by ephemeral hook
-            if role == "tool" or len(content) > 1000:
-                continue
-            chat_log.append(f"[{role}] {content}")
-            
-        history_text = "\n".join(chat_log)
+        batch_size = 200
+        total_topics = 0
+        total_facts = 0
         
-        try:
-            resp = None
-            last_err = None
-            for ref_model_str in reflection_models:
-                try:
-                    client, actual_model = get_client(ref_model_str)
-                except Exception as e:
-                    logger.warning(f"[Reflection] Could not load client for reflection_model: {ref_model_str} ({e})")
+        for i in range(0, len(msgs), batch_size):
+            batch_msgs = msgs[i:i+batch_size]
+            chat_log = []
+            for r in batch_msgs:
+                role = r["role"]
+                content = r["content"]
+                # Exclude massive system outputs or tool dumps if any were missed by ephemeral hook
+                if role == "tool" or len(content) > 1000:
                     continue
-                    
-                try:
-                    from nemollm import ChatMessage
-                    resp = client.chat(
-                        model=actual_model,
-                        messages=[ChatMessage(role="user", content=f"【对话记录】\n{history_text}")],
-                        system=REFLECTION_PROMPT,
-                    )
-                    break
-                except Exception as e:
-                    logger.warning(f"[Reflection] Model {actual_model} failed: {e}")
-                    last_err = e
-                    continue
-                    
-            if not resp:
-                logger.error(f"[Reflection] All reflection models failed for scope {scope}. Last error: {last_err}")
+                chat_log.append(f"[{role}] {content}")
+                
+            if not chat_log:
                 continue
                 
-            resp_text = resp.text.strip()
-            if resp_text.startswith("```json"):
-                resp_text = resp_text[7:]
-            if resp_text.endswith("```"):
-                resp_text = resp_text[:-3]
+            history_text = "\n".join(chat_log)
+            
+            try:
+                resp = None
+                last_err = None
+                for ref_model_str in reflection_models:
+                    try:
+                        client, actual_model = get_client(ref_model_str)
+                    except Exception as e:
+                        logger.warning(f"[Reflection] Could not load client for reflection_model: {ref_model_str} ({e})")
+                        continue
+                        
+                    try:
+                        from nemollm import ChatMessage
+                        resp = client.chat(
+                            model=actual_model,
+                            messages=[ChatMessage(role="user", content=f"【对话记录】\n{history_text}")],
+                            system=REFLECTION_PROMPT,
+                        )
+                        break
+                    except Exception as e:
+                        logger.warning(f"[Reflection] Model {actual_model} failed: {e}")
+                        last_err = e
+                        continue
+                        
+                if not resp:
+                    logger.error(f"[Reflection] All reflection models failed for scope {scope} batch {i}-{i+batch_size}. Last error: {last_err}")
+                    continue
+                    
+                resp_text = resp.text.strip()
+                if resp_text.startswith("```json"):
+                    resp_text = resp_text[7:]
+                if resp_text.endswith("```"):
+                    resp_text = resp_text[:-3]
+                    
+                data = json.loads(resp_text)
                 
-            data = json.loads(resp_text)
-            
-            topics = data.get("topics", [])
-            core_facts = data.get("core_facts", [])
-            
-            # Save topics to DB (Mid-term)
-            for t in topics:
-                conn.execute(
-                    "INSERT INTO topics (scope_key, topic_summary, created_at) VALUES (?, ?, ?)",
-                    (scope, t, time.time())
-                )
-            conn.commit()
-            
-            # Save core facts to state_store (Long-term)
-            for fact_obj in core_facts:
-                uid = fact_obj.get("user_id")
-                fact_text = fact_obj.get("fact")
-                if uid and fact_text:
-                    user_key = f"user_{uid}"
-                    existing_facts = state_store.get("memory", user_key, "facts", default=[])
-                    if fact_text not in existing_facts:
-                        existing_facts.append(fact_text)
-                        state_store.set("memory", user_key, "facts", existing_facts)
-            
-            logger.info("[Reflection] Scope %s processed successfully. Extracted %d topics and %d core facts.", scope, len(topics), len(core_facts))
-        except Exception as e:
-            logger.error("[Reflection] Failed to process scope %s: %s", scope, e)
+                topics = data.get("topics", [])
+                core_facts = data.get("core_facts", [])
+                
+                # Save topics to DB (Mid-term)
+                for t in topics:
+                    conn.execute(
+                        "INSERT INTO topics (scope_key, topic_summary, created_at) VALUES (?, ?, ?)",
+                        (scope, t, time.time())
+                    )
+                conn.commit()
+                
+                # Save core facts to state_store (Long-term)
+                for fact_obj in core_facts:
+                    uid = fact_obj.get("user_id")
+                    fact_text = fact_obj.get("fact")
+                    if uid and fact_text:
+                        user_key = f"user_{uid}"
+                        existing_facts = state_store.get("memory", user_key, "facts", default=[])
+                        if fact_text not in existing_facts:
+                            existing_facts.append(fact_text)
+                            state_store.set("memory", user_key, "facts", existing_facts)
+                
+                total_topics += len(topics)
+                total_facts += len(core_facts)
+            except Exception as e:
+                logger.error("[Reflection] Failed to process batch %d-%d for scope %s: %s", i, i+batch_size, scope, e)
+                
+        logger.info("[Reflection] Scope %s processed successfully. Extracted %d topics and %d core facts.", scope, total_topics, total_facts)
             
     logger.info("[Reflection] Reflection job completed.")
