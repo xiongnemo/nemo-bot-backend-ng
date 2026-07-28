@@ -149,6 +149,8 @@ def bot_execute(message: Message, config: dict):
     
     import matplotlib
     matplotlib.use("Agg")
+    matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'PingFang SC', 'WenQuanYi Micro Hei', 'sans-serif']
+    matplotlib.rcParams['axes.unicode_minus'] = False
     import matplotlib.pyplot as plt
     import matplotlib.ticker as mticker
     

@@ -20,6 +20,10 @@ try:
     matplotlib.use('Agg')
     matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'PingFang SC', 'WenQuanYi Micro Hei', 'sans-serif']
     matplotlib.rcParams['axes.unicode_minus'] = False
+    matplotlib.rcParams['mathtext.fontset'] = 'custom'
+    matplotlib.rcParams['mathtext.rm'] = 'Microsoft YaHei'
+    matplotlib.rcParams['mathtext.it'] = 'Microsoft YaHei:italic'
+    matplotlib.rcParams['mathtext.bf'] = 'Microsoft YaHei:bold'
 except Exception:
     pass
 
