@@ -58,26 +58,34 @@ class Sender:
 
         try:
             import importlib
+            from core.message_context import MessageContext
+            from pathlib import Path
+            
             adapter = importlib.import_module(f"adapters.{frontend}")
             if adapter is None:
                 logger.error("No adapter found for frontend: %s", frontend)
                 return
 
-            from core.message_context import MessageContext
             ctx = MessageContext(context)
+
+            def _transform_url(url: str | None):
+                if not url: return None
+                if url.startswith("http://") or url.startswith("https://") or url.startswith("base64://") or url.startswith("file://"):
+                    return url
+                return Path(url)
 
             if action.voice_url:
                 adapter.send_voice(
                     context=ctx, message=action.text,
                     auto_escape=action.auto_escape,
-                    voice=action.voice_url,
+                    voice=_transform_url(action.voice_url),
                     reply=(action.kind == "reply"),
                 )
             elif action.photo_url:
                 adapter.send_photo(
                     context=ctx, message=action.text,
                     auto_escape=action.auto_escape,
-                    photo=action.photo_url,
+                    photo=_transform_url(action.photo_url),
                     reply=(action.kind == "reply"),
                 )
             else:
