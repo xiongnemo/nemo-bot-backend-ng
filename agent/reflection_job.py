@@ -74,11 +74,13 @@ def run_reflection_job():
             continue
             
         batch_size = 200
+        overlap_size = 20
         total_topics = 0
         total_facts = 0
         
-        for i in range(0, len(msgs), batch_size):
-            batch_msgs = msgs[i:i+batch_size]
+        i = 0
+        while i < len(msgs):
+            batch_msgs = msgs[i : i + batch_size]
             chat_log = []
             for r in batch_msgs:
                 role = r["role"]
@@ -89,6 +91,9 @@ def run_reflection_job():
                 chat_log.append(f"[{role}] {content}")
                 
             if not chat_log:
+                if i + batch_size >= len(msgs):
+                    break
+                i += (batch_size - overlap_size)
                 continue
                 
             history_text = "\n".join(chat_log)
@@ -154,6 +159,10 @@ def run_reflection_job():
                 total_facts += len(core_facts)
             except Exception as e:
                 logger.error("[Reflection] Failed to process batch %d-%d for scope %s: %s", i, i+batch_size, scope, e)
+                
+            if i + batch_size >= len(msgs):
+                break
+            i += (batch_size - overlap_size)
                 
         logger.info("[Reflection] Scope %s processed successfully. Extracted %d topics and %d core facts.", scope, total_topics, total_facts)
             
