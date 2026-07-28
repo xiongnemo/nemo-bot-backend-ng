@@ -92,11 +92,12 @@ class IngestMessage:
     user_id: str
     user_name: str
     message_id: str
-    self_id: str
-    ated: bool
-    text: str
-    imgs: list[str]
-    raw_message: Any
+    self_id: str = ""
+    ated: bool = False
+    frontend_system_info: str = ""
+    text: str = ""
+    imgs: list[str] = field(default_factory=list)
+    raw_message: Any = None
     timestamp: float = 0.0
     nickname: str = ""
     reply_to: dict | None = None
@@ -142,6 +143,7 @@ class IngestMessage:
             message_id=str(ctx.get("message_id", "")),
             self_id=str(ctx.get("self_id", "")),
             ated=bool(ctx.get("ated", False)),
+            frontend_system_info=str(ctx.get("frontend_system_info", "")),
             text=str(req.get("args", "")),
             imgs=list(req.get("imgs", [])),
             raw_message=req.get("raw_message", ""),

@@ -18,7 +18,8 @@ _enabled = 1
 def bot_execute(message: Message, config: dict):
     current_time = time.time()
     # If the frontend timestamp is reliable, calculate latency
-    latency = current_time - message.timestamp if message.timestamp > 0 else 0
+    timestamp = getattr(message, 'timestamp', 0)
+    latency = current_time - timestamp if timestamp > 0 else 0
     
     if latency > 0 and latency < 86400:
         message.reply(f"pong! 通信链路延迟大约 {latency:.3f} 秒")

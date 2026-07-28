@@ -17,6 +17,10 @@ _enabled = 1
 @generic_exception_handler
 def bot_execute(message: Message, config: dict):
     frontend = message.frontend
+    frontend_info = getattr(message.context, "frontend_system_info", "")
+    if not frontend_info:
+        frontend_info = f"nemo-bot-frontend-qq ({frontend}) by nemo, 0.2.0"
+        
     footnote = """
 ==
 nemo-bot 以使用 Python 而不是 Java, NodeJS, Ruby, Perl, PhP, C+-#%^* 或者 Rust 编写而自豪。
@@ -24,7 +28,9 @@ This Nemo has nemo power."""
     text = (
         f"头像是卡比，似乎和另外一个 bot 是镜像，但可惜它已经寄了\n"
         f"==\n"
-        f"nemo-bot ({frontend} via backend-ng) by nemo, 0.2.0\n"
+        f"{frontend_info}\n"
+        f"==\n"
+        f"nemo-bot-backend-ng by nemo, 0.2.0\n"
         f"由 Python {platform.python_version()} 所执行, \n"
         f"运行在节点 {platform.node()}, \n"
         f"由 {platform.platform()} 所承载。\n"

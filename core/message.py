@@ -66,6 +66,7 @@ class Message:
                 "message_id": self.context.message_id,
                 "self_id": self.context.self_id,
                 "ated": self.context.ated,
+                "frontend_system_info": self.context.frontend_system_info,
             },
             "request": {
                 "command": self.request.command,
