@@ -26,24 +26,24 @@ class Ruleset:
 
     def add_prefix(self, prefix: str, plugin: str, strip: bool = True):
         def _match(msg: IngestMessage) -> RuleMatch | None:
-            if msg.text.startswith(prefix):
-                args = msg.text[len(prefix):].strip() if strip else msg.text
+            if msg.full_text.startswith(prefix):
+                args = msg.full_text[len(prefix):].strip() if strip else msg.full_text
                 return RuleMatch(plugin, args)
             return None
         self.rules.append(_match)
 
     def add_suffix(self, suffix: str, plugin: str, strip: bool = True):
         def _match(msg: IngestMessage) -> RuleMatch | None:
-            if msg.text.endswith(suffix):
-                args = msg.text[:-len(suffix)].strip() if strip else msg.text
+            if msg.full_text.endswith(suffix):
+                args = msg.full_text[:-len(suffix)].strip() if strip else msg.full_text
                 return RuleMatch(plugin, args)
             return None
         self.rules.append(_match)
 
     def add_custom(self, matcher: Callable[[str], bool], plugin: str, stripper: Callable[[str], str]):
         def _match(msg: IngestMessage) -> RuleMatch | None:
-            if matcher(msg.text):
-                return RuleMatch(plugin, stripper(msg.text))
+            if matcher(msg.full_text):
+                return RuleMatch(plugin, stripper(msg.full_text))
             return None
         self.rules.append(_match)
 

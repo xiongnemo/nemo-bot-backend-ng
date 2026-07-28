@@ -64,6 +64,15 @@ class MessageStore:
         conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
 
+    def exists(self, message_id: str) -> bool:
+        if not message_id:
+            return False
+        conn = self.db.get_conn()
+        row = conn.execute(
+            "SELECT 1 FROM messages WHERE message_id = ? LIMIT 1", (message_id,)
+        ).fetchone()
+        return row is not None
+
     # ------------------------------------------------------------------
     # Read
     # ------------------------------------------------------------------

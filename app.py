@@ -249,6 +249,16 @@ def create_channel():
 def _handle_ingest(payload: dict):
     try:
         msg = IngestMessage.from_dict(payload)
+        
+        if msg.reply_to and "message_id" in msg.reply_to:
+            reply_id = msg.reply_to["message_id"]
+            if not msg_store.exists(reply_id):
+                msg_store.ingest(
+                    frontend=msg.frontend, group_id=msg.group_id, user_id=msg.reply_to.get("user_id", ""),
+                    user_name=msg.reply_to.get("user_name", ""), text=msg.reply_to.get("text", ""), message_id=reply_id,
+                    ated=False, imgs=[], raw_message="", timestamp=msg.reply_to.get("timestamp") or (msg.timestamp - 1)
+                )
+
         msg_store.ingest(
             frontend=msg.frontend, group_id=msg.group_id, user_id=msg.user_id,
             user_name=msg.user_name, text=msg.text, message_id=msg.message_id,
@@ -313,7 +323,13 @@ def _handle_ingest(payload: dict):
             def observer_callback(actions):
                 sender.deliver_actions(payload, actions)
             
-            actions = agent_runner.run(raw_msg, route.query, run_id=run_id, observer=observer_callback)
+            agent_query = route.query
+            if msg.reply_to and "text" in msg.reply_to:
+                reply_user = msg.reply_to.get("user_name") or msg.reply_to.get("user_id") or "未知"
+                reply_id = msg.reply_to.get("message_id", "未知ID")
+                agent_query = f"【引用了消息】({reply_user}/{reply_id}): {msg.reply_to['text']}\n【回复】: {agent_query}"
+            
+            actions = agent_runner.run(raw_msg, agent_query, run_id=run_id, observer=observer_callback)
             sender.deliver_actions(payload, actions)
         elif route.mode == "man":
             _execute_man(payload)

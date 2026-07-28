@@ -98,6 +98,14 @@ class IngestMessage:
     imgs: list[str]
     raw_message: Any
     timestamp: float = 0.0
+    nickname: str = ""
+    reply_to: dict | None = None
+
+    @property
+    def full_text(self) -> str:
+        if self.reply_to and "text" in self.reply_to:
+            return f"{self.text} {self.reply_to['text']}".strip()
+        return self.text
 
     def to_dict(self) -> dict:
         """Convert to the wire dict that Message.__init__ expects."""
@@ -116,6 +124,7 @@ class IngestMessage:
                 "args": self.text,
                 "imgs": self.imgs,
                 "raw_message": self.raw_message,
+                "reply_to": self.reply_to,
             },
         }
 
@@ -129,7 +138,7 @@ class IngestMessage:
             frontend=d.get("frontend", ""),
             group_id=str(ctx.get("group_id", "")),
             user_id=str(ctx.get("user_id", "")),
-            user_name=str(ctx.get("user_name", "")),
+            user_name=str(ctx.get("nickname", "") or ctx.get("user_name", "")),
             message_id=str(ctx.get("message_id", "")),
             self_id=str(ctx.get("self_id", "")),
             ated=bool(ctx.get("ated", False)),
@@ -137,4 +146,6 @@ class IngestMessage:
             imgs=list(req.get("imgs", [])),
             raw_message=req.get("raw_message", ""),
             timestamp=float(d.get("timestamp", _time.time())),
+            nickname=str(ctx.get("nickname", "")),
+            reply_to=req.get("reply_to", None),
         )
