@@ -51,15 +51,14 @@ def fetch_gate_klines(symbol: str, interval: str = "1d", limit: int = 300) -> pd
 def bot_execute(message: Message, config: dict):
     args = message.request.args.strip()
     if not args:
-        message.reply("400: nemo: 请提供交易对，例如 BTCUSDT 4h")
-        return
+        args = "ETH 5m"
         
     parts = args.split()
     symbol = parts[0].upper().replace("/", "")
     if "_" not in symbol and not symbol.endswith("USDT") and not symbol.endswith("USD"):
         symbol += "USDT"
         
-    interval = parts[1].lower() if len(parts) > 1 else "1d"
+    interval = parts[1].lower() if len(parts) > 1 else "5m"
     
     valid_intervals = ["5m", "15m", "30m", "1h", "4h", "1d", "1w"]
     if interval not in valid_intervals:

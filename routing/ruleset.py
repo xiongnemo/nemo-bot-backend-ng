@@ -27,7 +27,7 @@ class Ruleset:
     def add_prefix(self, prefix: str, plugin: str, strip: bool = True):
         def _match(msg: IngestMessage) -> RuleMatch | None:
             if msg.full_text.startswith(prefix):
-                args = msg.full_text[len(prefix):].strip() if strip else msg.full_text
+                args = msg.full_text[len(prefix):].strip() if strip else msg.full_text[len(prefix):]
                 return RuleMatch(plugin, args)
             return None
         self.rules.append(_match)
@@ -35,7 +35,7 @@ class Ruleset:
     def add_suffix(self, suffix: str, plugin: str, strip: bool = True):
         def _match(msg: IngestMessage) -> RuleMatch | None:
             if msg.full_text.endswith(suffix):
-                args = msg.full_text[:-len(suffix)].strip() if strip else msg.full_text
+                args = msg.full_text[:-len(suffix)].strip() if strip else msg.full_text[:-len(suffix)]
                 return RuleMatch(plugin, args)
             return None
         self.rules.append(_match)
