@@ -268,6 +268,17 @@ def _handle_ingest(payload: dict):
             ated=msg.ated, imgs=msg.imgs, raw_message=msg.raw_message, timestamp=msg.timestamp
         )
 
+        # --- Alias Interception Start ---
+        first_word = msg.full_text.split()[0] if msg.full_text.strip() else ""
+        if first_word:
+            alias_target = state_store.get("alias", "global", first_word)
+            if alias_target:
+                # Replace the first word with the alias target
+                msg.full_text = alias_target + msg.full_text[len(first_word):]
+                msg.text = alias_target + msg.text[len(first_word):]
+                logger.info("Alias expanded: %s -> %s", first_word, alias_target)
+        # --- Alias Interception End ---
+
         route = router.route(msg)
         logger.info("Routed message to: %s", route.mode)
 
