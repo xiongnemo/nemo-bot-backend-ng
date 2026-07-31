@@ -2,7 +2,7 @@ from core.message import Message
 from utilities import generic_exception_handler
 import logging
 import shlex
-from app import db
+from store.database import Database
 from store.state_store import StateStore
 from config import is_superuser
 
@@ -20,6 +20,7 @@ def bot_execute(message: Message, config: dict):
         raise ValueError("401: nemo: 只有超级用户可以管理 alias")
 
     args_str = message.request.args.strip()
+    db = Database()
     state_store = StateStore(db)
     
     if not args_str:
