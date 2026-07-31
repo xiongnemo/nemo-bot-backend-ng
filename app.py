@@ -327,10 +327,14 @@ def _handle_ingest(payload: dict):
                 sender.deliver_actions(payload, actions)
             
             agent_query = route.query
-            if msg.reply_to and "text" in msg.reply_to:
-                reply_user = msg.reply_to.get("user_name") or msg.reply_to.get("user_id") or "未知"
-                reply_id = msg.reply_to.get("message_id", "未知ID")
-                agent_query = f"【引用了消息】({reply_user}/{reply_id}): {msg.reply_to['text']}\n【回复】: {agent_query}"
+            if msg.reply_to:
+                if "text" in msg.reply_to:
+                    reply_user = msg.reply_to.get("user_name") or msg.reply_to.get("user_id") or "未知"
+                    reply_id = msg.reply_to.get("message_id", "未知ID")
+                    agent_query = f"【引用了消息】({reply_user}/{reply_id}): {msg.reply_to['text']}\n【回复】: {agent_query}"
+                if msg.reply_to.get("imgs"):
+                    msg.imgs.extend(msg.reply_to["imgs"])
+                    raw_msg.request.imgs.extend(msg.reply_to["imgs"])
             
             actions = agent_runner.run(raw_msg, agent_query, run_id=run_id, observer=observer_callback)
             sender.deliver_actions(payload, actions)
