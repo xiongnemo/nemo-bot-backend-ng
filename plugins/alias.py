@@ -1,5 +1,4 @@
-from core.types import Message
-from core.exceptions import RequestParsingError
+from core.message import Message
 from utilities import generic_exception_handler
 import logging
 
@@ -18,7 +17,7 @@ def bot_execute(message: Message, config: dict):
     # This plugin just provides an interface to manage them in the StateStore.
     args = message.request.args.split()
     if not args:
-        raise RequestParsingError(f"400: nemo: 请提供子命令，例如: alias list")
+        raise ValueError(f"400: nemo: 请提供子命令，例如: alias list")
     
     action = args[0]
     # TODO: Implement StateStore integration for alias management
