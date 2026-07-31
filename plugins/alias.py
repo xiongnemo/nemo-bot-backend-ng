@@ -16,7 +16,7 @@ _enabled = 1
 
 @generic_exception_handler
 def bot_execute(message: Message, config: dict):
-    if not is_superuser(message.frontend, message.user_id):
+    if not is_superuser(message.frontend, message.context.user_id):
         raise ValueError("401: nemo: 只有超级用户可以管理 alias")
 
     args_str = message.request.args.strip()
