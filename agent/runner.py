@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 def _sanitize_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     """Ensure tool calls and tool responses are properly paired and valid."""
     cleaned = []
+    seen_tc_ids = set()
     i = 0
     while i < len(messages):
         msg = messages[i]
@@ -37,19 +38,47 @@ def _sanitize_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
             while j < len(messages) and messages[j].role == "tool":
                 tool_msgs.append(messages[j])
                 j += 1
+            
+            unique_tcs = []
+            for tc in msg.tool_calls:
+                if tc.id not in seen_tc_ids:
+                    unique_tcs.append(tc)
+                    seen_tc_ids.add(tc.id)
+            msg.tool_calls = unique_tcs
+
             expected_ids = {tc.id for tc in msg.tool_calls if tc.id}
             found_ids = {tm.tool_call_id for tm in tool_msgs if tm.tool_call_id}
-            if expected_ids and not expected_ids.issubset(found_ids):
+            
+            if not msg.tool_calls:
+                if msg.content:
+                    cleaned.append(ChatMessage(role="assistant", content=msg.content))
+            elif expected_ids and not expected_ids.issubset(found_ids):
                 if msg.content:
                     cleaned.append(ChatMessage(role="assistant", content=msg.content))
             else:
                 cleaned.append(msg)
-                cleaned.extend(tool_msgs)
+                cleaned.extend([tm for tm in tool_msgs if tm.tool_call_id in expected_ids])
             i = j
         else:
             cleaned.append(msg)
             i += 1
-    return cleaned
+            
+    # Final pass: merge consecutive text-only messages to satisfy Gemini API strict alternation
+    final = []
+    for m in cleaned:
+        if not final:
+            final.append(m)
+        else:
+            last = final[-1]
+            if last.role == m.role and last.role in ("user", "assistant"):
+                if not getattr(last, "tool_calls", None) and not getattr(m, "tool_calls", None):
+                    last.content = f"{last.content}\n\n{m.content}".strip()
+                else:
+                    final.append(m)
+            else:
+                final.append(m)
+                
+    return final
 
 
 class AgentRunner:
