@@ -67,6 +67,13 @@ class OpenAIClient(BaseLLMClient):
         logger.debug("POST %s (model=%s, tools=%d)", url, model, len(tools or []))
         resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
 
+        # Handle o1 or models that do not support temperature
+        if resp.status_code == 400 and "temperature" in resp.text:
+            logger.warning("Temperature is unsupported for this model (OpenAI), retrying without temperature.")
+            if "temperature" in payload:
+                del payload["temperature"]
+            resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+
         if resp.status_code != 200:
             logger.error("OpenAI API error: %d %s", resp.status_code, resp.text)
         resp.raise_for_status()
