@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _name = "安全的数学与逻辑计算器"
 _command = ["python_sandbox", "python_eval"]
 _man = "用法: 供 Agent 内部工具调用"
-_tool_description = "执行 Python 代码来计算数学公式、处理数据。不支持 import 等系统调用。代码可以包含变量定义，多行逻辑。你必须使用 print() 输出结果。只有 print() 的内容或直接返回的表达式结果会被提取！注意：请直接输出纯文本代码，绝对不要使用 ```python 这种 Markdown 代码块包裹！"
+_tool_description = "执行 Python 代码来计算数学公式、处理数据。不支持 import 等系统调用（但已经为你预先导入了 math 和 random 模块，可直接使用）。代码可以包含变量定义，多行逻辑。你必须使用 print() 输出结果。只有 print() 的内容或直接返回的表达式结果会被提取！注意：请直接输出纯文本代码，绝对不要使用 ```python 这种 Markdown 代码块包裹！"
 _enabled = 1
 
 _parameters = {
@@ -57,8 +57,11 @@ def bot_execute(message: Message, config: dict):
     # We create an io.StringIO to capture print output
     out_buf = io.StringIO()
     err_buf = io.StringIO()
+    
+    import math
+    import random
 
-    aeval = Interpreter(writer=out_buf, err_writer=err_buf)
+    aeval = Interpreter(usersyms={'math': math, 'random': random}, writer=out_buf, err_writer=err_buf)
 
     try:
         res = aeval(code)
