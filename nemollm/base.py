@@ -17,10 +17,11 @@ class BaseLLMClient(ABC):
     Every provider must implement at least `chat`.
     """
 
-    def __init__(self, base_url: str, api_key: str, timeout: int = 120):
+    def __init__(self, base_url: str, api_key: str, timeout: int = 120, default_temperature: float | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.default_temperature = default_temperature
 
     @abstractmethod
     def chat(
@@ -30,7 +31,7 @@ class BaseLLMClient(ABC):
         messages: list[ChatMessage],
         system: str = "",
         tools: list[ToolDefinition] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs,
     ) -> LLMResponse:
@@ -55,7 +56,7 @@ class BaseLLMClient(ABC):
         messages: list[ChatMessage],
         system: str = "",
         tools: list[ToolDefinition] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs,
     ) -> Iterator[LLMStreamChunk]:

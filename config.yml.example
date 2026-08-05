@@ -23,6 +23,7 @@ agent:
 
 llm:
   timeout: 300  # 全局请求超时时间（秒），防止长思考断开
+  temperature: 0.7 # 全局模型温度配置，如果不填默认为 0.7
   gatekeeper_model: nemo-axonhub-gemini:gemini-3.5-flash-lite
   reflection_model: nemo-axonhub-gemini:gemini-3.5-flash-lite
   vision_model: nemo-axonhub-openai:mimo-v2.5
@@ -34,10 +35,12 @@ llm:
   - nemo-axonhub-openai:glm-5.2
   - nemo-axonhub-openai:deepseek-v4-pro
   providers:
+    # 你可以为特定 provider 单独配置 temperature，或者设为 null 让其完全不发送 temperature 参数（适用 Claude Code 等不支持的代理）
     nemo-axonhub-anthropic:
       api_key: 'your_api_key_here'
       base_url: http://192.168.1.200:8090/anthropic
       type: anthropic
+      temperature: null
     nemo-axonhub-gemini:
       api_key: 'your_api_key_here'
       base_url: http://192.168.1.200:8090/gemini

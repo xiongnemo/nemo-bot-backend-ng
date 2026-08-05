@@ -23,7 +23,7 @@ class GeminiClient(BaseLLMClient):
         messages: list[ChatMessage],
         system: str = "",
         tools: list[ToolDefinition] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs,
     ) -> LLMResponse:
@@ -58,10 +58,12 @@ class GeminiClient(BaseLLMClient):
         # 2. Build payload
         payload: dict[str, Any] = {
             "contents": contents,
-            "generationConfig": {
-                "temperature": temperature,
-            },
+            "generationConfig": {},
         }
+        
+        final_temp = temperature if temperature is not None else self.default_temperature
+        if final_temp is not None:
+            payload["generationConfig"]["temperature"] = final_temp
         if kwargs.get("response_format") == "json":
             payload["generationConfig"]["responseMimeType"] = "application/json"
         

@@ -34,27 +34,32 @@ class ModelRegistry:
 
         p_cfg = config.get("providers", {})
         global_timeout = config.get("timeout", 120)
+        global_temperature = config.get("temperature", 0.7)
         for name, p_data in p_cfg.items():
             ptype = p_data.get("type", name)  # fallback to name if type missing
             timeout = p_data.get("timeout", global_timeout)
+            temp = p_data.get("temperature", global_temperature)
             
             if ptype == "openai":
                 self.providers[name] = OpenAIClient(
                     base_url=p_data.get("base_url", "https://api.openai.com/v1"),
                     api_key=p_data.get("api_key", ""),
                     timeout=timeout,
+                    default_temperature=temp,
                 )
             elif ptype == "anthropic":
                 self.providers[name] = AnthropicClient(
                     base_url=p_data.get("base_url", "https://api.anthropic.com"),
                     api_key=p_data.get("api_key", ""),
                     timeout=timeout,
+                    default_temperature=temp,
                 )
             elif ptype == "gemini":
                 self.providers[name] = GeminiClient(
                     base_url=p_data.get("base_url", "https://generativelanguage.googleapis.com"),
                     api_key=p_data.get("api_key", ""),
                     timeout=timeout,
+                    default_temperature=temp,
                 )
             else:
                 logger.warning(f"Unknown provider type '{ptype}' for provider '{name}'")

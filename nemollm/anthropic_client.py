@@ -23,7 +23,7 @@ class AnthropicClient(BaseLLMClient):
         messages: list[ChatMessage],
         system: str = "",
         tools: list[ToolDefinition] | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs,
     ) -> LLMResponse:
@@ -59,8 +59,11 @@ class AnthropicClient(BaseLLMClient):
             "model": model,
             "messages": wire_messages,
             "max_tokens": max_tokens or 8192,
-            "temperature": temperature,
         }
+        
+        final_temp = temperature if temperature is not None else self.default_temperature
+        if final_temp is not None:
+            payload["temperature"] = final_temp
         if system:
             payload["system"] = system
 
