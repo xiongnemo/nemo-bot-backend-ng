@@ -86,6 +86,12 @@ class AnthropicClient(BaseLLMClient):
         }
 
         resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+        if resp.status_code == 400 and "temperature" in resp.text and "deprecated" in resp.text:
+            logger.warning("Temperature is deprecated for this model, retrying without temperature.")
+            if "temperature" in payload:
+                del payload["temperature"]
+            resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+
         if resp.status_code != 200:
             logger.error("Anthropic API error: %d %s", resp.status_code, resp.text)
         resp.raise_for_status()
