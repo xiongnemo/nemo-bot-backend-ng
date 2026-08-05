@@ -158,3 +158,21 @@ def send_photo(context: MessageContext, message: str = "", photo: str = '', repl
             }
         })
     send_msg(context, messages, reply=reply)
+
+def withdraw(context: MessageContext, target_id: str):
+    endpoint = f"{SATORI_HTTP_ENDPOINT}/message.delete"
+    channel_id = context.group_id if context.group_id else f'private:{context.user_id}'
+    params = {
+        "channel_id": channel_id,
+        "message_id": target_id
+    }
+    r = requests.post(endpoint, json=params, headers={"Content-Type": "application/json", "Authorization": f"Bearer {backend_config['message_backend']['satori_http']['token']}"})
+    if r.status_code != 200:
+        raise Exception(f"Satori API Error: {r.text}")
+    return "撤回成功"
+
+def pin(context: MessageContext, target_id: str):
+    raise Exception("Satori 暂不支持置顶(pin)操作。")
+
+def unpin(context: MessageContext, target_id: str):
+    raise Exception("Satori 暂不支持取消置顶(unpin)操作。")

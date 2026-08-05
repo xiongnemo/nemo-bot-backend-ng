@@ -85,4 +85,31 @@ def send_photo(context: MessageContext, message: str = "", photo: str = '', repl
             send_msg(context, f'[CQ:image,file=base64://{photo}]', auto_escape=True)
     else:
         send_msg(context, f'[CQ:image,file={photo}]', auto_escape=True)
+
+def withdraw(context: MessageContext, target_id: str):
+    endpoint = f"{CQHTTP_ENDPOINT}/delete_msg"
+    params = {"message_id": int(target_id)}
+    r = requests.post(endpoint, json=params)
+    resp = r.json()
+    if resp.get("status") != "ok":
+        raise Exception(f"API Error: {resp}")
+    return "撤回成功"
+
+def pin(context: MessageContext, target_id: str):
+    endpoint = f"{CQHTTP_ENDPOINT}/set_essence_msg"
+    params = {"message_id": int(target_id)}
+    r = requests.post(endpoint, json=params)
+    resp = r.json()
+    if resp.get("status") != "ok":
+        raise Exception(f"API Error: {resp}")
+    return "置顶精华成功"
+
+def unpin(context: MessageContext, target_id: str):
+    endpoint = f"{CQHTTP_ENDPOINT}/delete_essence_msg"
+    params = {"message_id": int(target_id)}
+    r = requests.post(endpoint, json=params)
+    resp = r.json()
+    if resp.get("status") != "ok":
+        raise Exception(f"API Error: {resp}")
+    return "取消置顶精华成功"
     

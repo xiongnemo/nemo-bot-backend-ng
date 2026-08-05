@@ -71,7 +71,8 @@ def recent_messages_executor(args: dict, msg: Message, store: MessageStore) -> d
     formatted = []
     for r in results:
         sender = r.get("user_name") or r.get("user_id") or "Unknown"
-        formatted.append(f"[{r.get('created_at')}] {sender}: {r.get('text')}")
+        msg_id_info = f" [msg_id: {r.get('message_id')}]" if r.get('message_id') else ""
+        formatted.append(f"[{r.get('created_at')}]{msg_id_info} {sender}: {r.get('text')}")
         
     return {"result": "\n".join(formatted)}
 

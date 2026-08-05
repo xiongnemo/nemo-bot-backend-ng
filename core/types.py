@@ -13,11 +13,12 @@ from typing import Any, Literal, Optional
 
 @dataclass
 class Action:
-    kind: Literal["reply", "send"]
+    kind: Literal["reply", "send", "withdraw", "pin", "unpin"]
     text: str = ""
     auto_escape: bool = True
     photo_url: Optional[str] = None
     voice_url: Optional[str] = None
+    target_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -26,6 +27,7 @@ class Action:
             "auto_escape": self.auto_escape,
             "photo_url": self.photo_url,
             "voice_url": self.voice_url,
+            "target_id": self.target_id,
         }
 
     @classmethod
@@ -36,6 +38,7 @@ class Action:
             auto_escape=d.get("auto_escape", True),
             photo_url=d.get("photo_url"),
             voice_url=d.get("voice_url"),
+            target_id=d.get("target_id"),
         )
 
 
@@ -98,6 +101,7 @@ class IngestMessage:
     text: str = ""
     imgs: list[str] = field(default_factory=list)
     raw_message: Any = None
+    capabilities: list[str] = field(default_factory=list)
     timestamp: float = 0.0
     nickname: str = ""
     reply_to: dict | None = None

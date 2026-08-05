@@ -46,6 +46,42 @@ def send_msg(context: MessageContext, message: str = "Hello from nemo-bot-ng-bac
         logger.debug(f"Telegram send_msg chunk result: {last_result}")
         
     return last_result
+
+def withdraw(context: MessageContext, target_id: str):
+    endpoint = f"{TELEGRAM_API_ENDPOINT}{TELEGRAM_BOT_TOKEN}/deleteMessage"
+    data = {
+        "chat_id": context.group_id if context.group_id else context.user_id,
+        "message_id": int(target_id)
+    }
+    r = s.post(endpoint, json=data)
+    resp = _safe_json(r)
+    if not resp.get("ok"):
+        raise Exception(f"Telegram API Error: {resp}")
+    return "撤回成功"
+
+def pin(context: MessageContext, target_id: str):
+    endpoint = f"{TELEGRAM_API_ENDPOINT}{TELEGRAM_BOT_TOKEN}/pinChatMessage"
+    data = {
+        "chat_id": context.group_id if context.group_id else context.user_id,
+        "message_id": int(target_id)
+    }
+    r = s.post(endpoint, json=data)
+    resp = _safe_json(r)
+    if not resp.get("ok"):
+        raise Exception(f"Telegram API Error: {resp}")
+    return "置顶成功"
+
+def unpin(context: MessageContext, target_id: str):
+    endpoint = f"{TELEGRAM_API_ENDPOINT}{TELEGRAM_BOT_TOKEN}/unpinChatMessage"
+    data = {
+        "chat_id": context.group_id if context.group_id else context.user_id,
+        "message_id": int(target_id)
+    }
+    r = s.post(endpoint, json=data)
+    resp = _safe_json(r)
+    if not resp.get("ok"):
+        raise Exception(f"Telegram API Error: {resp}")
+    return "取消置顶成功"
     
 def send_voice(context: MessageContext, message: str = "子供たちに渡すプレゼントでお悩みですか？私と一緒に考えましょうか。ふふっ。", voice: str = 'https://cdnimg.gamekee.com/wiki2.0/images/w_0/h_0/829/223205/2022/11/14/450314.ogg', reply: bool = False, *args, **kwargs):
     endpoint = f"{TELEGRAM_API_ENDPOINT}{TELEGRAM_BOT_TOKEN}/sendVoice"
