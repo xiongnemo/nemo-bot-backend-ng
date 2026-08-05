@@ -63,20 +63,9 @@ class Router:
         if msg.ated:
             return RouteResult(mode="agent", query=text)
 
-        # 4. NLP / Keyword check (is it addressing the bot?)
-        if self._is_addressing_me(text):
-            return RouteResult(mode="agent", query=text)
-
         # 5. Group chat noise -> ignore
         if msg.group_id:
             return RouteResult(mode="silent")
 
         # 6. Direct Message (fallback to agent)
         return RouteResult(mode="agent", query=text)
-
-    def _is_addressing_me(self, text: str) -> bool:
-        lower = text.lower()
-        for name in self.bot_names:
-            if name in lower:
-                return True
-        return False
