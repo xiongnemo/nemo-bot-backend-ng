@@ -147,16 +147,27 @@ class AgentRunner:
             ))
             
         messages = _sanitize_messages(messages)
+        
+        all_imgs = list(message.request.imgs)
+        reply_ctx = ""
+        if getattr(message.request, "reply_to", None):
+            reply_text = message.request.reply_to.get("text", "")
+            reply_imgs = message.request.reply_to.get("imgs", [])
+            reply_author = message.request.reply_to.get("user_name", "") or message.request.reply_to.get("user_id", "Unknown")
+            if reply_imgs:
+                all_imgs.extend(reply_imgs)
+            reply_ctx = f"\n\n[Replying to {reply_author}]:\n{reply_text}".rstrip()
+
         img_str = ""
-        if message.request.imgs:
-            urls = "\n".join([f"[附图/Image Attached]: {url}" for url in message.request.imgs])
+        if all_imgs:
+            urls = "\n".join([f"[附图/Image Attached]: {url}" for url in all_imgs])
             img_str = f"\n{urls}"
             
         # Append new user message with speaker injection if in group
         if gid:
-            formatted_query = f"[{message.context.user_name} (ID: {uid})]:\n{query}{img_str}"
+            formatted_query = f"[{message.context.user_name} (ID: {uid})]:\n{query}{reply_ctx}{img_str}"
         else:
-            formatted_query = f"{query}{img_str}"
+            formatted_query = f"{query}{reply_ctx}{img_str}"
             
         messages.append(ChatMessage(role="user", content=formatted_query))
         

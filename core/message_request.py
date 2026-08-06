@@ -11,6 +11,7 @@ class MessageRequest:
         self.command: str = str(request.get("command", ""))
         self.imgs: list[str] = list(request.get("imgs", []))
         self.raw_message: Union[str, dict] = request.get("raw_message", "")
+        self.reply_to: dict | None = request.get("reply_to")
 
     def __str__(self) -> str:
         args_display = self.args if self.args else "NONE"

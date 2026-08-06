@@ -108,8 +108,6 @@ class IngestMessage:
 
     @property
     def full_text(self) -> str:
-        if self.reply_to and "text" in self.reply_to:
-            return f"{self.text} {self.reply_to['text']}".strip()
         return self.text
 
     def to_dict(self) -> dict:
