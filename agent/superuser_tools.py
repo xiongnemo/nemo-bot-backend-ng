@@ -38,13 +38,26 @@ def shell_executor(args: dict, msg: Message) -> dict:
         result = subprocess.run(
             exe_args,
             capture_output=True,
-            text=True,
             timeout=30,
             shell=is_windows,
         )
+        
+        def decode_bytes(b: bytes) -> str:
+            if not b: return ""
+            try:
+                return b.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    return b.decode("gbk")
+                except UnicodeDecodeError:
+                    return b.decode("utf-8", errors="replace")
+                    
+        stdout_str = decode_bytes(result.stdout)
+        stderr_str = decode_bytes(result.stderr)
+
         return {
-            "stdout": result.stdout[:4000],  # truncate to prevent overwhelming LLM
-            "stderr": result.stderr[:2000],
+            "stdout": stdout_str[:4000],  # truncate to prevent overwhelming LLM
+            "stderr": stderr_str[:2000],
             "returncode": result.returncode,
         }
     except subprocess.TimeoutExpired:
