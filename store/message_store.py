@@ -132,6 +132,36 @@ class MessageStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_by_time_range(
+        self,
+        start_time: float,
+        end_time: float | None = None,
+        group_id: str = "",
+        limit: int = 100,
+    ) -> list[dict]:
+        """Get messages within a specific time range."""
+        conn = self.db.get_conn()
+        
+        # If end_time is not provided, default to current time
+        if end_time is None:
+            end_time = time.time()
+            
+        if group_id:
+            rows = conn.execute(
+                """SELECT * FROM messages
+                   WHERE group_id = ? AND timestamp >= ? AND timestamp <= ?
+                   ORDER BY timestamp ASC LIMIT ?""",
+                (group_id, start_time, end_time, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT * FROM messages
+                   WHERE timestamp >= ? AND timestamp <= ?
+                   ORDER BY timestamp ASC LIMIT ?""",
+                (start_time, end_time, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def count(self, group_id: str = "") -> int:
         conn = self.db.get_conn()
         if group_id:

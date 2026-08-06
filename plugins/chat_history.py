@@ -23,8 +23,8 @@ _parameters = {
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["recent", "search"],
-            "description": "操作类型。recent: 获取最近的消息；search: 搜索过往消息"
+            "enum": ["recent", "search", "time_range"],
+            "description": "操作类型。recent: 获取最近的消息；search: 搜索过往消息；time_range: 按时间范围检索消息"
         },
         "query": {
             "type": "string",
@@ -33,6 +33,14 @@ _parameters = {
         "limit": {
             "type": "integer",
             "description": "返回的消息数量上限，默认 20，最大 50"
+        },
+        "start_time": {
+            "type": "number",
+            "description": "起始时间的时间戳（Unix 秒，支持小数）。仅当 action 为 time_range 时需要"
+        },
+        "end_time": {
+            "type": "number",
+            "description": "结束时间的时间戳（Unix 秒，支持小数）。仅当 action 为 time_range 时可选，不填默认为当前时间"
         }
     },
     "required": ["action"]
@@ -67,6 +75,18 @@ def bot_execute(message: Message, config: dict) -> None:
             message.reply("搜索操作需要提供 query 参数。")
             return
         rows = message_store.search(query=query, group_id=gid, limit=limit)
+    elif action == "time_range":
+        start_time = args.get("start_time")
+        end_time = args.get("end_time")
+        if start_time is None:
+            message.reply("按时间范围检索需要提供 start_time 参数（Unix 时间戳）。")
+            return
+        rows = message_store.get_by_time_range(
+            start_time=float(start_time),
+            end_time=float(end_time) if end_time else None,
+            group_id=gid,
+            limit=limit
+        )
     else:
         message.reply(f"未知的 action: {action}")
         return
