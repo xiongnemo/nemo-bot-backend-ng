@@ -92,6 +92,7 @@ class RouteResult:
 class IngestMessage:
     frontend: str
     group_id: str
+    group_name: str
     user_id: str
     user_name: str
     message_id: str
@@ -116,6 +117,7 @@ class IngestMessage:
             "frontend": self.frontend,
             "context": {
                 "group_id": self.group_id,
+                "group_name": getattr(self, "group_name", ""),
                 "user_id": self.user_id,
                 "user_name": self.user_name,
                 "message_id": self.message_id,
@@ -140,6 +142,7 @@ class IngestMessage:
         return cls(
             frontend=d.get("frontend", ""),
             group_id=str(ctx.get("group_id", "")),
+            group_name=str(ctx.get("group_name", "")),
             user_id=str(ctx.get("user_id", "")),
             user_name=str(ctx.get("nickname", "") or ctx.get("user_name", "")),
             message_id=str(ctx.get("message_id", "")),

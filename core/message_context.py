@@ -6,6 +6,7 @@ from __future__ import annotations
 class MessageContext:
     def __init__(self, context: dict) -> None:
         self.group_id: str = str(context.get("group_id", ""))
+        self.group_name: str = str(context.get("group_name", ""))
         self.user_id: str = str(context.get("user_id", ""))
         self.message_id: str = str(context.get("message_id", ""))
         self.self_id: str = str(context.get("self_id", ""))

@@ -165,7 +165,8 @@ class AgentRunner:
             
         # Append new user message with speaker injection if in group
         if gid:
-            formatted_query = f"[{message.context.user_name} (ID: {uid})]:\n{query}{reply_ctx}{img_str}"
+            group_info = f" (Group: {message.context.group_name})" if getattr(message.context, "group_name", "") else ""
+            formatted_query = f"[{message.context.user_name} (ID: {uid}){group_info}]:\n{query}{reply_ctx}{img_str}"
         else:
             formatted_query = f"{query}{reply_ctx}{img_str}"
             
