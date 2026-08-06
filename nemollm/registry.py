@@ -9,6 +9,7 @@ from .anthropic_client import AnthropicClient
 from .base import BaseLLMClient
 from .gemini_client import GeminiClient
 from .openai_client import OpenAIClient
+from .openai_responses_client import OpenAIResponsesClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,13 @@ class ModelRegistry:
             
             if ptype == "openai":
                 self.providers[name] = OpenAIClient(
+                    base_url=p_data.get("base_url", "https://api.openai.com/v1"),
+                    api_key=p_data.get("api_key", ""),
+                    timeout=timeout,
+                    default_temperature=temp,
+                )
+            elif ptype == "openai-responses":
+                self.providers[name] = OpenAIResponsesClient(
                     base_url=p_data.get("base_url", "https://api.openai.com/v1"),
                     api_key=p_data.get("api_key", ""),
                     timeout=timeout,

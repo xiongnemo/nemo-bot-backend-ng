@@ -49,6 +49,11 @@ llm:
       api_key: 'your_api_key_here'
       base_url: http://192.168.1.200:8090/v1
       type: openai
+    # OpenAI Responses API 示例 (适用部分新模型)
+    # openai-responses-provider:
+    #   api_key: 'your_api_key_here'
+    #   base_url: https://api.openai.com/v1
+    #   type: openai-responses
 
 message_backend:
   console:
