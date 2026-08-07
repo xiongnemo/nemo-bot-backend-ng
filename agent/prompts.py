@@ -121,7 +121,23 @@ Agent Execution Rules:
     if user_facts:
         facts_str = "\n".join(f"- {f}" for f in user_facts)
         memory_blocks.append(f"【关于该用户的长期记忆】\n{facts_str}")
-        
+
+    # User profile & affinity (per-user workspace, keyed by normalized primary uid)
+    try:
+        from runtime import context as rt_context
+        if getattr(rt_context, "profile_store", None) is not None:
+            profile_text = rt_context.profile_store.render_for_prompt(msg.context.user_id)
+            if profile_text:
+                memory_blocks.append(f"【该用户的画像档案】\n{profile_text}\n（如对话中发现用户新的身份信息、爱好、生日等，请调用 update_profile 工具更新画像。）")
+        if getattr(rt_context, "affinity_store", None) is not None:
+            aff = rt_context.affinity_store.get_state(msg.context.user_id)
+            memory_blocks.append(
+                f"【你对该用户的好感度】当前 {aff['score']:.1f}/100，关系等级：{aff['level']}。语气指导：{aff['tone']}\n"
+                f"如果本轮对话中用户的言行让你明显感到温暖或被冒犯，可调用 adjust_affinity 工具微调好感度（±5 以内），平淡的日常对话不要调用。"
+            )
+    except Exception:
+        pass
+
     has_valid_name = bool(msg.context.user_name and msg.context.user_name != str(msg.context.user_id) and msg.context.user_name.lower() != "unknown")
     if not has_valid_name and not user_facts:
         memory_blocks.append("【高优先级指令 - 用户初始化引导】\n检测到当前交互的用户还没有初始化个人记忆档案（未知称呼）。请在回复的开头自然地、幽默地引导对方介绍一下自己，并询问系统该如何称呼 Ta，以便你建立个人档案。")
@@ -135,10 +151,8 @@ Agent Execution Rules:
         topics = []
         try:
             from runtime import context as rt_context
-            conn = rt_context.db.get_conn()
             scope_key = f"agent:{msg.frontend}:group:{msg.context.group_id}"
-            cur = conn.execute("SELECT topic_summary FROM topics WHERE scope_key = ? ORDER BY created_at DESC LIMIT 5", (scope_key,))
-            topics = [r[0] for r in cur.fetchall()]
+            topics = rt_context.topic_store.recent(scope_key, limit=5)
         except Exception:
             pass
             

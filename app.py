@@ -104,6 +104,13 @@ def setup():
     context.state_store = state_store
     context.db = db
 
+    from store.affinity_store import AffinityStore
+    from store.profile_store import ProfileStore
+    from store.topic_store import TopicStore
+    context.affinity_store = AffinityStore(state_store)
+    context.profile_store = ProfileStore(state_store)
+    context.topic_store = TopicStore(db)
+
     # 3. LLM
     init_registry(app_config.backend_config.get("llm", {}))
 
@@ -329,6 +336,17 @@ def _handle_ingest(payload: dict):
                     logger.info("User %s is unauthorized for %s. Silently dropping.", target_user, plugin_name)
                     return
         # --- ACL Logic End ---
+
+        # --- Affinity Tracking Start ---
+        try:
+            from runtime import context as rt_context
+            if rt_context.affinity_store is not None:
+                rt_context.affinity_store.record_message(
+                    primary_uid, engaged=route.mode in ("command", "agent")
+                )
+        except Exception:
+            logger.exception("Affinity tracking failed")
+        # --- Affinity Tracking End ---
 
         if route.mode == "command":
             _execute_command(raw_msg, route)
