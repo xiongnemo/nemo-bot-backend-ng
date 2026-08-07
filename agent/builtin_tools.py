@@ -153,6 +153,70 @@ def forget_fact_executor(args: dict, msg: Message, store: StateStore) -> dict:
         return {"result": f"已成功从长期记忆 ({scope_type}) 中删除: {fact}"}
     return {"result": f"找不到该事实，无法删除 ({scope_type})。请确保精确匹配。"}
 
+
+# 6. User Profile & Affinity
+UPDATE_PROFILE_DEF = ToolDefinition(
+    name="update_profile",
+    description="更新当前用户的结构化画像档案。当你在对话中感知到用户的称呼偏好、职业、生日、爱好、性格特点或其他值得备注的信息时，主动调用此工具记录。画像严格按用户隔离，只影响当前对话用户。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "field": {
+                "type": "string",
+                "enum": ["nickname", "occupation", "birthday", "hobbies", "personality", "notes"],
+                "description": "画像字段：nickname 称呼偏好 / occupation 职业 / birthday 生日 / hobbies 爱好 / personality 性格 / notes 备注",
+            },
+            "action": {
+                "type": "string",
+                "enum": ["set", "append", "remove"],
+                "description": "set: 覆盖设置；append: 向列表字段追加；remove: 删除某项或清除字段",
+            },
+            "value": {"type": "string", "description": "字段内容，精简准确。"},
+        },
+        "required": ["field", "action", "value"],
+    },
+)
+
+def update_profile_executor(args: dict, msg: Message) -> dict:
+    from runtime import context
+    if context.profile_store is None:
+        return {"error": "画像系统未启用。"}
+    result = context.profile_store.apply(
+        msg.context.user_id,
+        args.get("field", ""),
+        args.get("action", "append"),
+        args.get("value", ""),
+    )
+    return {"result": result}
+
+
+ADJUST_AFFINITY_DEF = ToolDefinition(
+    name="adjust_affinity",
+    description="微调你对当前用户的好感度。仅当用户的言行让你产生明显情绪波动时调用：温暖/贴心/有趣的举动加分（正数），无礼/冒犯/恶意的言行扣分（负数）。单次幅度 ±5 以内，每日总额受限。平淡的日常对话不要调用。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "delta": {"type": "number", "description": "好感度变化量，范围 -5 到 +5。"},
+            "reason": {"type": "string", "description": "调整原因，简短一句话。"},
+        },
+        "required": ["delta", "reason"],
+    },
+)
+
+def adjust_affinity_executor(args: dict, msg: Message) -> dict:
+    from runtime import context
+    if context.affinity_store is None:
+        return {"error": "好感度系统未启用。"}
+    try:
+        delta = float(args.get("delta", 0))
+    except (TypeError, ValueError):
+        return {"error": "delta 必须是数字。"}
+    reason = (args.get("reason") or "").strip() or "未说明"
+    r = context.affinity_store.adjust(msg.context.user_id, delta, reason, source="llm")
+    return {
+        "result": f"好感度已调整 {r['applied_delta']:+.1f}（原因：{reason}）。当前 {r['score']:.1f}/100，关系等级：{r['level']}。"
+    }
+
 def think_executor(args: dict, msg: Message, sender: Sender = None, state_store: StateStore = None) -> dict:
     thought = args.get("thought", "")
     if sender and state_store:
@@ -934,6 +998,16 @@ def register_builtin_tools(registry, message_store: MessageStore, state_store: S
     registry.register_builtin(
         FORGET_FACT_DEF,
         lambda args, msg, sender: forget_fact_executor(args, msg, state_store),
+    )
+
+    registry.register_builtin(
+        UPDATE_PROFILE_DEF,
+        lambda args, msg, sender: update_profile_executor(args, msg),
+    )
+
+    registry.register_builtin(
+        ADJUST_AFFINITY_DEF,
+        lambda args, msg, sender: adjust_affinity_executor(args, msg),
     )
     
     from config import backend_config

@@ -67,3 +67,15 @@ def get_reflection_model() -> list[str]:
         return [val]
     return val if isinstance(val, list) else []
 
+def get_affinity_config() -> dict:
+    """获取好感度系统静态配置（affinity 节）"""
+    val = backend_config.get("affinity", {})
+    return val if isinstance(val, dict) else {}
+
+def get_reflection_retention_days() -> float:
+    """conversations 表保留天数（反思任务清理用），0 = 不清理"""
+    try:
+        return float(backend_config.get("reflection", {}).get("retention_days", 14))
+    except Exception:
+        return 14.0
+
