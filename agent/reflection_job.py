@@ -177,7 +177,7 @@ def run_reflection_job():
         # DM scopes carry the (normalized) user id in the scope key itself
         dm_hint = ""
         if ":dm:" in scope:
-            dm_uid = scope.rsplit(":", 1)[-1]
+            dm_uid = scope.split(":dm:", 1)[-1]
             dm_hint = (
                 f"【注意】这是 bot 与单个用户的私聊记录，对话中 [user] 角色的发言均来自 user_id 为 {dm_uid} 的用户。"
                 f"所有 core_facts / profile_updates / affinity_adjustments 的 user_id 都必须填 {dm_uid}。\n"

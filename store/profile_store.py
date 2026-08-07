@@ -8,6 +8,7 @@ update_profile builtin tool (realtime) and the daily reflection job (batch).
 from __future__ import annotations
 
 import time
+import threading
 from typing import Any
 
 from .state_store import StateStore
@@ -32,6 +33,7 @@ LIST_ITEM_LIMIT = 20
 class ProfileStore:
     def __init__(self, state_store: StateStore):
         self.state_store = state_store
+        self._lock = threading.Lock()
 
     def get(self, uid: str) -> dict[str, Any]:
         data = self.state_store.get("profile", f"user_{uid}", "data")
@@ -49,33 +51,34 @@ class ProfileStore:
         if not value and action != "remove":
             return "value 不能为空。"
 
-        data = self.get(uid)
-        label = FIELD_LABELS[field]
+        with self._lock:
+            data = self.get(uid)
+            label = FIELD_LABELS[field]
 
-        if field in STR_FIELDS:
-            if action == "remove":
-                data.pop(field, None)
+            if field in STR_FIELDS:
+                if action == "remove":
+                    data.pop(field, None)
+                    self._save(uid, data)
+                    return f"已清除{label}。"
+                data[field] = value
                 self._save(uid, data)
-                return f"已清除{label}。"
-            data[field] = value
-            self._save(uid, data)
-            return f"已更新{label}: {value}"
+                return f"已更新{label}: {value}"
 
-        items: list[str] = list(data.get(field) or [])
-        if action == "remove":
-            if value not in items:
-                return f"{label}中找不到: {value}"
-            items.remove(value)
-        elif action == "set":
-            items = [value]
-        else:  # append (default)
-            if value in items:
-                return f"{label}中已存在: {value}"
-            items.append(value)
-        limit = NOTES_LIMIT if field == "notes" else LIST_ITEM_LIMIT
-        data[field] = items[-limit:]
-        self._save(uid, data)
-        return f"已更新{label}: {', '.join(data[field]) if data[field] else '（空）'}"
+            items: list[str] = list(data.get(field) or [])
+            if action == "remove":
+                if value not in items:
+                    return f"{label}中找不到: {value}"
+                items.remove(value)
+            elif action == "set":
+                items = [value]
+            else:  # append (default)
+                if value in items:
+                    return f"{label}中已存在: {value}"
+                items.append(value)
+            limit = NOTES_LIMIT if field == "notes" else LIST_ITEM_LIMIT
+            data[field] = items[-limit:]
+            self._save(uid, data)
+            return f"已更新{label}: {', '.join(data[field]) if data[field] else '（空）'}"
 
     def render_for_prompt(self, uid: str) -> str:
         """Compact prompt block; empty string when the profile has no content."""
