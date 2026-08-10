@@ -56,10 +56,11 @@ Agent Execution Rules:
 """
 
 
-    # 2. Contextual Environment
-    now = datetime.now()
+    from datetime import datetime, timezone, timedelta
+    tz_bj = timezone(timedelta(hours=8))
+    now = datetime.now(tz_bj)
     weekday_map = {0: "一", 1: "二", 2: "三", 3: "四", 4: "五", 5: "六", 6: "日"}
-    current_time_str = f"{now.strftime('%Y-%m-%d %H:%M:%S')} (星期{weekday_map[now.weekday()]})"
+    current_time_str = f"{now.strftime('%Y-%m-%d %H:%M:%S')} (北京时间 UTC+8, 星期{weekday_map[now.weekday()]})"
     
     import platform
     import locale
