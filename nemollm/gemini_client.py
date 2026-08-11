@@ -145,7 +145,22 @@ class GeminiClient(BaseLLMClient):
                 }
             })
         else:
-            if msg.content:
+            if isinstance(msg.content, list):
+                for part in msg.content:
+                    if part.get("type") == "text":
+                        parts.append({"text": part.get("text", "")})
+                    elif part.get("type") == "image_url":
+                        url = part.get("image_url", {}).get("url", "")
+                        if url.startswith("data:"):
+                            mime_type = url.split(";")[0][5:]
+                            b64_data = url.split(",", 1)[1]
+                            parts.append({
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": b64_data
+                                }
+                            })
+            elif msg.content:
                 parts.append({"text": str(msg.content)})
             if msg.tool_calls:
                 for tc in msg.tool_calls:

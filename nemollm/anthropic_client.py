@@ -158,7 +158,11 @@ class AnthropicClient(BaseLLMClient):
         if msg.tool_calls:
             # Assistant returning tool calls
             content_blocks = []
-            if msg.content:
+            if isinstance(msg.content, list):
+                for part in msg.content:
+                    if part.get("type") == "text":
+                        content_blocks.append({"type": "text", "text": part.get("text", "")})
+            elif msg.content:
                 content_blocks.append({"type": "text", "text": str(msg.content)})
             for tc in msg.tool_calls:
                 content_blocks.append({
@@ -168,5 +172,25 @@ class AnthropicClient(BaseLLMClient):
                     "input": tc.arguments,
                 })
             return {"role": "assistant", "content": content_blocks}
+
+        content_blocks = []
+        if isinstance(msg.content, list):
+            for part in msg.content:
+                if part.get("type") == "text":
+                    content_blocks.append({"type": "text", "text": part.get("text", "")})
+                elif part.get("type") == "image_url":
+                    url = part.get("image_url", {}).get("url", "")
+                    if url.startswith("data:"):
+                        mime_type = url.split(";")[0][5:]
+                        b64_data = url.split(",", 1)[1]
+                        content_blocks.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime_type,
+                                "data": b64_data
+                            }
+                        })
+            return {"role": msg.role, "content": content_blocks}
 
         return {"role": msg.role, "content": str(msg.content)}
