@@ -38,8 +38,13 @@ class FeedService:
             
         meta = payload.get("meta", {})
 
-        if not channel_name or not content:
-            return False, "Missing required fields (channel_name, content).", 400
+        if not channel_name:
+            return False, "Missing required field: channel_name.", 400
+            
+        if not content:
+            # Silently filter out feeds with empty content to avoid 400 spam
+            logger.info(f"Feed from channel '{channel_name}' has empty content. Ignored.")
+            return True, "Ignored empty content.", 200
 
         conn = self.db.get_conn()
         
