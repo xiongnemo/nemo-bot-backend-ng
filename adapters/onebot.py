@@ -11,6 +11,27 @@ from classes.message_context import MessageContext
 
 CQHTTP_ENDPOINT = backend_config["message_backend"]["onebot"]["endpoint"]
 
+import re
+
+def _parse_cq_to_segments(text: str) -> list:
+    segments = []
+    pattern = r'(\[CQ:[^\]]+\])'
+    parts = re.split(pattern, text)
+    for part in parts:
+        if not part: continue
+        if part.startswith('[CQ:') and part.endswith(']'):
+            cq_parts = part[4:-1].split(',')
+            data = {}
+            for kv in cq_parts[1:]:
+                if '=' in kv:
+                    k, v = kv.split('=', 1)
+                    data[k] = v.replace('&amp;', '&').replace('&#91;', '[').replace('&#93;', ']')
+            segments.append({'type': cq_parts[0], 'data': data})
+        else:
+            part = part.replace('&amp;', '&').replace('&#91;', '[').replace('&#93;', ']')
+            segments.append({'type': 'text', 'data': {'text': part}})
+    return segments
+
 
 def send_msg(context: MessageContext, message: str | list = "Hello from nemo-bot-ng-backend", auto_escape: bool = False, reply: bool = False):
     '''
@@ -18,12 +39,15 @@ def send_msg(context: MessageContext, message: str | list = "Hello from nemo-bot
     '''
     endpoint = f"{CQHTTP_ENDPOINT}/send_msg"
     if isinstance(message, str):
-        message = [{
-            "type": "text",
-            "data": {
-                "text": message
-            }
-        }]
+        if not auto_escape:
+            message = _parse_cq_to_segments(message)
+        else:
+            message = [{
+                "type": "text",
+                "data": {
+                    "text": message
+                }
+            }]
     if reply and context.message_id:
             message.insert(0, {
                 "type": "reply",
