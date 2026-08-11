@@ -107,8 +107,9 @@ def async_tag_images(urls: list[str], state_store):
                     temperature=0.3,
                 )
                 if response and response.text:
-                    state_store.set("img_tags", "global", url, response.text.strip())
-                    logger.info(f"Successfully tagged {url} using {v_model_str}")
+                    tag_result = response.text.strip()
+                    state_store.set("img_tags", "global", url, tag_result)
+                    logger.info(f"Successfully tagged {url} using {v_model_str}. Content:\n{tag_result}")
                     tagged = True
                     break
             except Exception as e:
