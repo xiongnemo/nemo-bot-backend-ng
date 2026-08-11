@@ -174,6 +174,7 @@ def ingest():
     """The unified entry point for all frontends."""
     payload = request.get_json()
     if not payload:
+        logger.warning("Ingest failed: Empty or invalid JSON payload")
         return jsonify(error="Empty payload"), 400
 
     # Non-blocking dispatch
@@ -218,10 +219,12 @@ def receive_feed():
 
     payload = request.json
     if not payload:
+        logger.warning("Feed ingest failed: Invalid or missing JSON payload")
         return jsonify({"error": "Invalid JSON payload"}), 400
 
     success, msg, status_code = feed_service.handle_incoming_feed(payload)
     if not success:
+        logger.warning(f"Feed ingest failed: {status_code} - {msg}. Payload snippet: {str(payload)[:500]}")
         return jsonify({"error": msg}), status_code
         
     return jsonify({"message": msg}), status_code
@@ -236,9 +239,14 @@ def create_channel():
         return jsonify({"error": "Unauthorized"}), 401
 
     payload = request.json
+    if not payload:
+        logger.warning("Channel creation failed: Invalid or missing JSON payload")
+        return jsonify({"error": "Invalid JSON payload"}), 400
+        
     channel_name = payload.get("name")
     description = payload.get("description", "")
     if not channel_name:
+        logger.warning(f"Channel creation failed: Missing channel 'name'. Payload snippet: {str(payload)[:500]}")
         return jsonify({"error": "Missing channel 'name'"}), 400
 
     try:
