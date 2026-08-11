@@ -44,7 +44,7 @@ def _fetch_image_as_base64(url: str) -> str:
     return base64.b64encode(content).decode("utf-8")
 
 
-def async_tag_images(urls: list[str], state_store):
+def async_tag_images(urls: list[str], message_id: str, state_store):
     """
     Background job to tag multiple images.
     """
@@ -117,3 +117,50 @@ def async_tag_images(urls: list[str], state_store):
                 
         if not tagged:
             logger.warning(f"All vision models failed to tag {url}")
+            
+    # If there are multiple images, generate an overall summary
+    if len(urls) > 1 and message_id:
+        existing_summary = state_store.get("img_tags", "summary", message_id)
+        if existing_summary:
+            return
+            
+        logger.info(f"Background summarizing {len(urls)} images for message {message_id}")
+        
+        summary_prompt = "以下是同一条消息中的多张图片。请结合所有的图片内容，给出这组图片的一个整体总结描述，指出它们之间的联系和核心主题。"
+        content_parts = [{"type": "text", "text": summary_prompt}]
+        
+        valid_images = False
+        for url in urls:
+            try:
+                b64_img = _fetch_image_as_base64(url)
+                data_uri = f"data:image/jpeg;base64,{b64_img}"
+                content_parts.append({"type": "image_url", "image_url": {"url": data_uri}})
+                valid_images = True
+            except Exception:
+                continue
+                
+        if not valid_images:
+            return
+            
+        summary_msg = ChatMessage(role="user", content=content_parts)
+        
+        for v_model_str in vision_models:
+            parts = v_model_str.split(":", 1)
+            provider_name, actual_model = parts if len(parts) == 2 else ("openai", v_model_str)
+            client = registry.providers.get(provider_name)
+            if not client:
+                continue
+                
+            try:
+                response = client.chat(
+                    model=actual_model,
+                    messages=[summary_msg],
+                    temperature=0.3,
+                )
+                if response and response.text:
+                    summary_result = response.text.strip()
+                    state_store.set("img_tags", "summary", message_id, summary_result)
+                    logger.info(f"Successfully summarized message {message_id} using {v_model_str}")
+                    break
+            except Exception as e:
+                logger.warning(f"Failed to summarize message {message_id} using {v_model_str}: {e}")

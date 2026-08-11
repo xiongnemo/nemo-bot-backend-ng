@@ -170,6 +170,11 @@ class AgentRunner:
             urls = "\n\n".join(img_parts)
             img_str = f"\n{urls}"
             
+            # Check for overall summary
+            summary = self.state_store.get("img_tags", "summary", message.request.message_id)
+            if summary:
+                img_str += f"\n\n<多图整体总结>: {summary}"
+            
         # Append new user message with speaker injection if in group
         if gid:
             group_info = f" (Group: {message.context.group_name})" if getattr(message.context, "group_name", "") else ""
