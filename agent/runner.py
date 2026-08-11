@@ -160,7 +160,14 @@ class AgentRunner:
 
         img_str = ""
         if all_imgs:
-            urls = "\n".join([f"[附图/Image Attached]: {url}" for url in all_imgs])
+            img_parts = []
+            for url in all_imgs:
+                tag = self.state_store.get("img_tags", "global", url)
+                if tag:
+                    img_parts.append(f"[附图/Image Attached]: {url}\n<图像内容分析>: {tag}")
+                else:
+                    img_parts.append(f"[附图/Image Attached]: {url}")
+            urls = "\n\n".join(img_parts)
             img_str = f"\n{urls}"
             
         # Append new user message with speaker injection if in group

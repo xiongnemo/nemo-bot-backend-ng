@@ -275,6 +275,10 @@ def _handle_ingest(payload: dict):
             ated=msg.ated, imgs=msg.imgs, raw_message=msg.raw_message, timestamp=msg.timestamp
         )
 
+        if msg.imgs:
+            from agent.vision_tagger import async_tag_images
+            executor.submit_dispatch(async_tag_images, msg.imgs, state_store)
+
         # --- Alias Interception Start ---
         first_word = msg.full_text.split()[0] if msg.full_text.strip() else ""
         if first_word:
