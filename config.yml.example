@@ -96,3 +96,24 @@ acl:
 server:
   host: 0.0.0.0
   port: 42164
+
+# ======================================================================
+# 分层上下文系统（L1 群体氛围 / L2 加权历史 / L3 用户线索 / 检索 / 预算）
+# ======================================================================
+context:
+  budget_chars: 6000        # system prompt 记忆区总字符预算，超出按优先级裁剪
+  group_digest:             # L1: 群聊滚动快照（廉价模型压缩）
+    enabled: true
+    trigger_count: 80       # 每积累 N 条群消息压缩一次
+    min_count: 10           # 或消息数达到此值且窗口超时
+    max_age_seconds: 900
+    max_lines: 5            # 滚动保留的快照行数
+  user_thread:              # L3: 跨场景用户线索（规则写入 + LLM 压缩）
+    enabled: true
+    trigger_count: 8        # buffer 满 N 条触发压缩
+    trigger_age_hours: 48
+    expose_dm_in_group: false  # 群聊场景是否允许注入私聊来源的线索（隐私开关）
+  history:                  # L2: 群聊发言者加权历史加载
+    raw_turns: 60
+    own_turns: 15           # 当前发言者保留的完整轮数
+    other_turns_verbatim: 5 # 其他人保留原文的最近轮数（更早的折叠成前情提要）

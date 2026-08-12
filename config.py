@@ -79,3 +79,8 @@ def get_reflection_retention_days() -> float:
     except Exception:
         return 14.0
 
+
+def get_context_config() -> dict:
+    """分层上下文系统配置（context 节：group_digest / user_thread / budget / retrieval）"""
+    val = backend_config.get("context", {})
+    return val if isinstance(val, dict) else {}
