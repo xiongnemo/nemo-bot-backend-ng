@@ -52,7 +52,6 @@ app = Flask(__name__)
 
 db: Database = None
 state_store: Any = None
-kv_daemon: Any = None
 msg_store: MessageStore = None
 conv_store: ConversationStore = None
 executor: Executor = None
@@ -67,7 +66,7 @@ scheduler: SchedulerEngine = None
 
 
 def setup():
-    global db, state_store, kv_daemon, msg_store, conv_store, executor, sender, feed_service
+    global db, state_store, msg_store, conv_store, executor, sender, feed_service
     global ruleset, router, tool_registry, tool_executor, agent_runner, scheduler
     
     logger.info("Initializing nemo-bot-backend-ng...")
@@ -77,19 +76,7 @@ def setup():
 
     # 1. Stores
     db = Database()
-    storage_cfg = app_config.backend_config.get("storage", {})
-    if storage_cfg.get("enabled", False) and not is_check_mode:
-        from store.zmq_daemon import KVStorageDaemon
-        from store.zmq_client import ZmqStateStore
-        endpoint = storage_cfg.get("endpoint", "inproc://nemo-kv")
-        backend = storage_cfg.get("backend", "sqlite")
-        rdb_path = storage_cfg.get("rocksdb_path", "data/nemo_rocksdb")
-        kv_daemon = KVStorageDaemon(endpoint=endpoint, db=db, backend=backend, rocksdb_path=rdb_path)
-        kv_daemon.start(background=True)
-        state_store = ZmqStateStore(endpoint=endpoint)
-        logger.info("ZMQ Storage Daemon enabled (backend=%s, endpoint=%s)", backend, endpoint)
-    else:
-        state_store = StateStore(db)
+    state_store = StateStore(db)
     msg_store = MessageStore(db)
     conv_store = ConversationStore(db)
 
@@ -507,8 +494,6 @@ if __name__ == "__main__":
             executor.shutdown()
         if hasattr(state_store, "close"):
             state_store.close()
-        if kv_daemon:
-            kv_daemon.stop()
 
     server_cfg = app_config.backend_config.get("server", {})
     app.run(

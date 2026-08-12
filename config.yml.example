@@ -1,14 +1,6 @@
 # ======================================================================
-# Storage Configuration (ZeroMQ KV Storage Daemon & Engine Selection)
+# 全局配置 (Global Configuration)
 # ======================================================================
-# 默认使用内存通信 (inproc://nemo-kv)，有效避免跨线程/跨进程 SQLite 锁冲突。
-# 也可以配置为 TCP socket (例如 tcp://127.0.0.1:5555) 供跨进程或跨服务器访问。
-# backend 支持: "sqlite" (默认兼容模式) 或 "rocksdb" (LSM-Tree 高性能存储，基于 rocksdict whl)。
-storage:
-  enabled: true
-  backend: "rocksdb"
-  endpoint: "tcp://127.0.0.1:42166"
-  rocksdb_path: "data/nemo_rocksdb"
 
 agent:
   disable_think_tool: true  # 禁用内部思考(think)工具，避免产生多余轮次和废话
