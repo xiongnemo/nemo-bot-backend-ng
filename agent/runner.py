@@ -22,6 +22,19 @@ from .tool_registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 
+import re as _re
+
+AFFINITY_CLAIM_RE = _re.compile(r"好感度?\s*(?:[+＋\-－]|加了?|减了?|扣了?)\s*\d")
+AFFINITY_WRITE_TOOLS = {"adjust_affinity", "gift_affinity", "admin_affinity"}
+
+
+def affinity_claim_without_call(reply_text: str, turn_tool_names: list[str]) -> bool:
+    """True when the reply claims an affinity change but no affinity-write tool ran this turn."""
+    if not reply_text or not AFFINITY_CLAIM_RE.search(reply_text):
+        return False
+    return not any(t in AFFINITY_WRITE_TOOLS for t in turn_tool_names)
+
+
 def _sanitize_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     """Ensure tool calls and tool responses are properly paired and valid."""
     cleaned = []
@@ -299,14 +312,16 @@ class AgentRunner:
                 metadata=meta,
             )
             
+        turn_tool_names = []
+        for m in new_messages_for_db:
+            for tc in (getattr(m, "tool_calls", None) or []):
+                turn_tool_names.append(tc.name)
+
         # L3: record this turn into the per-user thread and maybe compress
         try:
             from runtime import context as rt_context
             if rt_context.user_thread_store is not None:
-                tool_names = []
-                for m in new_messages_for_db:
-                    for tc in (getattr(m, "tool_calls", None) or []):
-                        tool_names.append(tc.name)
+                tool_names = turn_tool_names
                 events = []
                 if "adjust_affinity" in tool_names:
                     events.append("affinity")
@@ -347,6 +362,9 @@ class AgentRunner:
                 if final_text == "[NO_REPLY]" or "[NO_REPLY]" in final_text:
                     logger.info("Agent returned [NO_REPLY], skipping final reply action.")
                 else:
+                    if affinity_claim_without_call(final_text, turn_tool_names):
+                        logger.warning("[AffinityGuard] Reply claims an affinity change but no affinity-write tool was called this turn. scope=%s", scope_key)
+                        final_text += "\n（系统提示：上面提到的好感度变动没有真正写入系统，实际分数请发送「好感度」查询为准）"
                     final_actions.append(Action(kind="reply", text=final_text))
         
         # Combine multiple images if present

@@ -91,6 +91,10 @@ def bot_execute(message: Message, config: dict) -> None:
         if not fact:
             message.reply("memorize 操作需要提供 fact 内容。")
             return
+        from store.affinity_store import is_affinity_stat_text
+        if is_affinity_stat_text(fact):
+            message.reply("拒绝记录：好感度/亲密度分数是动态数据，不允许写入长期记忆。查询请用 query_affinity。")
+            return
         if fact in facts:
             message.reply(f"事实 '{fact}' 已经存在，无需重复记录。")
             return

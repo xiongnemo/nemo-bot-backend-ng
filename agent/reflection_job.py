@@ -23,6 +23,7 @@ REFLECTION_PROMPT = """你是一个智能的“赛博群友”心理学引擎。
 1. Topics (话题聚类)：大家讨论了哪几个主要话题？请将废话折叠，提取出最具代表性的话题。
 2. Core Facts (核心事实)：提取关于用户的永久性事实（例如某人暴露了自己的职业、爱好、特殊经历，或者对某个事物强烈的喜恶）。如果没有，则留空。
 3. Profile Updates (画像更新)：如果对话中明确暴露了某用户的结构化画像信息，请提取。field 只允许：nickname(称呼偏好)、occupation(职业)、birthday(生日)、hobbies(爱好)、personality(性格特点)、notes(备注)。没有则留空。
+【禁止事项】Core Facts 和 Profile Updates 中严禁记录好感度/亲密度的具体分数（如"好感度69分"）——这类数值是实时变化的系统数据，写入记忆会造成污染。
 4. Affinity Adjustments (好感度调整)：站在 bot 的视角回顾，如果某用户当天的言行整体上特别温暖友善（正分）或特别无礼恶劣（负分），给出 -3 到 +3 的整数调整建议。表现平淡的用户不要出现在列表里。没有则留空。
 
 请务必以如下 JSON 格式返回，不要包含任何额外的 Markdown 标记（如 ```json）：
@@ -71,10 +72,14 @@ def _apply_reflection_data(data: dict, scope: str, state_store) -> tuple[int, in
         if isinstance(t, str) and t.strip():
             context.topic_store.add(scope, t.strip())
 
-    # Long-term facts
+    # Long-term facts (affinity stat numbers are volatile -> never persisted)
+    from store.affinity_store import is_affinity_stat_text
     for fact_obj in core_facts:
         uid = fact_obj.get("user_id")
         fact_text = fact_obj.get("fact")
+        if fact_text and is_affinity_stat_text(fact_text):
+            logger.info("[Reflection] Dropping stale affinity-stat fact: %s", fact_text)
+            continue
         if uid and fact_text:
             user_key = f"user_{uid}"
             existing_facts = state_store.get("memory", user_key, "facts", default=[])
@@ -89,6 +94,9 @@ def _apply_reflection_data(data: dict, scope: str, state_store) -> tuple[int, in
             field = str(upd.get("field") or "").strip()
             value = str(upd.get("value") or "").strip()
             if not uid or not value:
+                continue
+            if is_affinity_stat_text(value):
+                logger.info("[Reflection] Dropping affinity-stat profile value: %s", value)
                 continue
             if field in PROFILE_STR_FIELDS:
                 context.profile_store.apply(uid, field, "set", value)

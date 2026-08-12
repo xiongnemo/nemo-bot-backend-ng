@@ -51,7 +51,17 @@ DEFAULTS: dict[str, float] = {
     "llm_single_cap": 5.0,
     "llm_daily_cap": 10.0,
     "reflection_daily_cap": 3.0,
+    # fun: chat-gain critical hit (once per day)
+    "crit_chance": 0.05,
+    "crit_multiplier": 2.0,
 }
+
+# Weekly challenges: deterministic per (uid, iso-week), lazily evaluated
+CHALLENGES: list[dict] = [
+    {"id": "chat20", "name": "本周和我互动满 20 次", "metric": "interactions", "target": 20, "reward": 8.0},
+    {"id": "active5", "name": "本周有 5 天来找我聊天", "metric": "days_active", "target": 5, "reward": 8.0},
+    {"id": "gain25", "name": "本周累计赚取 25 点好感", "metric": "gain", "target": 25, "reward": 8.0},
+]
 
 MILESTONES: list[tuple[int, float, str]] = [
     (100, 5.0, "累计互动 100 次"),
@@ -73,7 +83,29 @@ LEVELS: list[tuple[float, str, int, str]] = [
 PEAK_FLOORS: list[tuple[float, float]] = [(81.0, 51.0), (51.0, 21.0)]
 
 HISTORY_LIMIT = 50
+TIMELINE_LIMIT = 30
 BIRTHDAY_RE = re.compile(r"(\d{1,2})\s*[月/\-.]\s*(\d{1,2})")
+
+# Volatile-stat leak guard: affinity numbers must never enter long-term memory
+AFFINITY_STAT_RE = re.compile(r"好感度?|好感分|亲密度|affinity", re.IGNORECASE)
+
+
+def is_affinity_stat_text(text: str) -> bool:
+    """True if the text looks like a stored affinity score (e.g. '好感度69分')."""
+    t = str(text or "")
+    return bool(AFFINITY_STAT_RE.search(t)) and any(ch.isdigit() for ch in t)
+
+
+SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def render_sparkline(values: list[float], lo: float | None = None, hi: float | None = None) -> str:
+    if not values:
+        return ""
+    lo = min(values) if lo is None else lo
+    hi = max(values) if hi is None else hi
+    span = (hi - lo) or 1.0
+    return "".join(SPARK_CHARS[min(7, int((v - lo) / span * 7.99))] for v in values)
 
 
 class AffinityStore:
@@ -130,7 +162,7 @@ class AffinityStore:
     # State load / save
     # ------------------------------------------------------------------
 
-    def _load(self, uid: str, now: float) -> dict[str, Any]:
+    def _load(self, uid: str, now: float, archive: bool = False) -> dict[str, Any]:
         state = self.state_store.get("affinity", f"user_{uid}", STATE_KEY)
         if not isinstance(state, dict):
             state = {
@@ -145,25 +177,71 @@ class AffinityStore:
                 "total_interactions": 0,
                 "history": [],
             }
-        self._roll_daily(state, now)
+        self._roll_daily(uid, state, now, archive=archive)
         return state
 
     def _save(self, uid: str, state: dict) -> None:
         state["peak_score"] = max(float(state.get("peak_score", 0.0)), float(state["score"]))
+        if not state.get("indexed"):
+            index = self.state_store.get("affinity", "global", "index", default=[])
+            if uid not in index:
+                index.append(uid)
+                self.state_store.set("affinity", "global", "index", index)
+            state["indexed"] = True
         self.state_store.set("affinity", f"user_{uid}", STATE_KEY, state)
 
     @staticmethod
     def _today(now: float) -> str:
         return datetime.fromtimestamp(now).strftime("%Y-%m-%d")
 
-    def _roll_daily(self, state: dict, now: float) -> dict:
+    def _roll_daily(self, uid: str, state: dict, now: float, archive: bool = False) -> dict:
         today = self._today(now)
         daily = state.get("daily") or {}
         if daily.get("date") != today:
+            # Archive the finished day into the per-user timeline. Only write
+            # paths archive; read paths (get_state, worker processes) stay pure.
+            if archive and daily.get("date"):
+                timeline = self.state_store.get("affinity", f"user_{uid}", "timeline", default=[])
+                timeline.append({
+                    "date": daily.get("date"),
+                    "end_score": round(float(state.get("score", 0.0)), 1),
+                    "chat": round(float(daily.get("chat_gain", 0.0)), 1),
+                    "event": round(float(daily.get("event_gain", 0.0)), 1),
+                    "llm": round(float(daily.get("llm_delta", 0.0)), 1),
+                    "refl": round(float(daily.get("reflection_delta", 0.0)), 1),
+                })
+                self.state_store.set("affinity", f"user_{uid}", "timeline", timeline[-TIMELINE_LIMIT:])
             daily = {"date": today, "chat_gain": 0.0, "event_gain": 0.0,
                      "llm_delta": 0.0, "reflection_delta": 0.0, "events": []}
             state["daily"] = daily
         return daily
+
+    @staticmethod
+    def _week(now: float) -> str:
+        return datetime.fromtimestamp(now).strftime("%G-W%V")
+
+    def _roll_weekly(self, uid: str, state: dict, now: float) -> dict:
+        week = self._week(now)
+        weekly = state.get("weekly") or {}
+        if weekly.get("week") != week:
+            import hashlib
+            idx = int(hashlib.md5(f"{uid}:{week}".encode()).hexdigest(), 16) % len(CHALLENGES)
+            weekly = {"week": week, "interactions": 0, "days_active": 0, "gain": 0.0,
+                      "last_active_date": "", "challenge": dict(CHALLENGES[idx]), "done": False}
+            state["weekly"] = weekly
+        return weekly
+
+    def _check_challenge(self, state: dict, cfg: dict) -> float:
+        weekly = state.get("weekly") or {}
+        ch = weekly.get("challenge")
+        if not ch or weekly.get("done"):
+            return 0.0
+        value = weekly.get(ch["metric"], 0)
+        if value >= ch["target"]:
+            weekly["done"] = True
+            return self._grant_event(state, cfg, f"challenge:{weekly['week']}",
+                                     float(ch["reward"]), f"周挑战达成：{ch['name']} 🏅")
+        return 0.0
 
     def _decay_floor(self, state: dict, cfg: dict) -> float:
         peak = float(state.get("peak_score", 0.0))
@@ -205,16 +283,31 @@ class AffinityStore:
         state["score"] = self._clamp(state["score"] + applied, cfg)
         daily["event_gain"] = float(daily.get("event_gain", 0.0)) + applied
         daily["events"].append({"k": key, "pts": round(applied, 1), "note": note})
+        if key.split(":")[0] in ("milestone", "birthday", "profile_share", "challenge", "gift_from", "gift_sent"):
+            history = state.get("history") or []
+            history.append({"ts": time.time(), "delta": round(applied, 2), "reason": note, "source": "event"})
+            state["history"] = history[-HISTORY_LIMIT:]
         if once == "ever":
             state["granted"].append(key)
         return applied
+
+    def _check_level_up(self, state: dict, old_score: float, now: float) -> None:
+        """Record a celebration event when the score crosses into a higher level."""
+        old_name, _, old_lv = self.get_level(old_score)
+        new_name, _, new_lv = self.get_level(float(state["score"]))
+        if new_lv > old_lv:
+            state["daily"]["events"].append(
+                {"k": f"levelup:{new_name}", "pts": 0, "note": f"关系升级：{old_name} → {new_name} 🎉"})
+            history = state.get("history") or []
+            history.append({"ts": now, "delta": 0, "reason": f"关系升级为「{new_name}」🎉", "source": "event"})
+            state["history"] = history[-HISTORY_LIMIT:]
 
     def grant_profile_share(self, uid: str, field: str, now: float | None = None) -> float:
         """Reward sharing personal info; granted once per field, ever."""
         now = now or time.time()
         with self._lock:
             cfg = self._cfg()
-            state = self._load(uid, now)
+            state = self._load(uid, now, archive=True)
             self._apply_decay(state, now, cfg)
             applied = self._grant_event(state, cfg, f"profile_share:{field}",
                                         cfg["profile_share_bonus"],
@@ -247,11 +340,19 @@ class AffinityStore:
         now = now or time.time()
         with self._lock:
             cfg = self._cfg()
-            state = self._load(uid, now)
+            state = self._load(uid, now, archive=True)
             self._apply_decay(state, now, cfg)
             daily = state["daily"]
             state["total_interactions"] = int(state.get("total_interactions", 0)) + 1
             gained = 0.0
+            score_before = float(state["score"])
+
+            weekly = self._roll_weekly(uid, state, now)
+            weekly["interactions"] = int(weekly.get("interactions", 0)) + 1
+            today = self._today(now)
+            if weekly.get("last_active_date") != today:
+                weekly["days_active"] = int(weekly.get("days_active", 0)) + 1
+                weekly["last_active_date"] = today
 
             # habit loop: daily first + streak (+ birthday surprise)
             streak = state.setdefault("streak", {"days": 0, "last_date": ""})
@@ -288,7 +389,15 @@ class AffinityStore:
                     daily["chat_gain"] = float(daily.get("chat_gain", 0.0)) + chat_gained
                     state["last_gain_ts"] = now
                     gained += chat_gained
+                    # fun: critical hit — chat gain doubled, at most once a day
+                    import random
+                    if random.random() < cfg["crit_chance"]:
+                        extra = chat_gained * (cfg["crit_multiplier"] - 1.0)
+                        gained += self._grant_event(state, cfg, "crit", extra, "⚡手气暴击！本次聊天加分翻倍")
 
+            weekly["gain"] = round(float(weekly.get("gain", 0.0)) + gained, 2)
+            gained += self._check_challenge(state, cfg)
+            self._check_level_up(state, score_before, now)
             state["last_interaction"] = now
             self._save(uid, state)
             return round(gained, 2)
@@ -299,9 +408,10 @@ class AffinityStore:
         now = now or time.time()
         with self._lock:
             cfg = self._cfg()
-            state = self._load(uid, now)
+            state = self._load(uid, now, archive=True)
             self._apply_decay(state, now, cfg)
             daily = state["daily"]
+            score_before = float(state["score"])
 
             if source == "llm":
                 cap = cfg["llm_single_cap"]
@@ -322,6 +432,7 @@ class AffinityStore:
             history = state.get("history") or []
             history.append({"ts": now, "delta": round(float(delta), 2), "reason": reason, "source": source})
             state["history"] = history[-HISTORY_LIMIT:]
+            self._check_level_up(state, score_before, now)
             state["last_interaction"] = now
             self._save(uid, state)
             name, _, _ = self.get_level(state["score"])
@@ -333,7 +444,7 @@ class AffinityStore:
         now = now or time.time()
         with self._lock:
             cfg = self._cfg()
-            state = self._load(uid, now)
+            state = self._load(uid, now, archive=True)
             old = float(state.get("score", 0.0))
             state["score"] = self._clamp(float(score), cfg)
             state["peak_score"] = max(float(state.get("peak_score", 0.0)), state["score"])
@@ -350,7 +461,85 @@ class AffinityStore:
     def reset(self, uid: str) -> bool:
         """Admin: wipe a user's affinity state entirely (restarts from zero)."""
         with self._lock:
+            self.state_store.delete("affinity", f"user_{uid}", "timeline")
             return self.state_store.delete("affinity", f"user_{uid}", STATE_KEY)
+
+    def gift(self, giver_uid: str, target_uid: str, now: float | None = None) -> dict[str, Any]:
+        """User-to-user gift: recipient +2, giver +1 (warmth is mutual).
+        Anti-abuse: giver once per day; requires giver level >= 熟悉(21)."""
+        now = now or time.time()
+        giver_uid, target_uid = str(giver_uid), str(target_uid)
+        if giver_uid == target_uid:
+            return {"ok": False, "reason": "不能给自己送礼。"}
+        with self._lock:
+            cfg = self._cfg()
+            giver = self._load(giver_uid, now, archive=True)
+            self._apply_decay(giver, now, cfg)
+            if giver["score"] < 21:
+                return {"ok": False, "reason": "赠礼需要你和 Nemo 的关系达到「熟悉」(21分) 以上。"}
+            if any(e.get("k") == "gift_sent" for e in giver["daily"]["events"]):
+                return {"ok": False, "reason": "今天已经送过礼了，明天再来吧。"}
+
+            target = self._load(target_uid, now, archive=True)
+            self._apply_decay(target, now, cfg)
+            t_before = float(target["score"])
+            received = self._grant_event(target, cfg, f"gift_from:{giver_uid}", 2.0,
+                                         f"收到来自 {giver_uid} 的好感度赠礼 🎁")
+            if received <= 0:
+                return {"ok": False, "reason": "对方今天已经收过你的礼物了（或对方今日事件加分已满）。"}
+            g_before = float(giver["score"])
+            self._grant_event(giver, cfg, "gift_sent", 1.0, f"向 {target_uid} 赠出好感度 🎁（暖心 +1）")
+            self._check_level_up(target, t_before, now)
+            self._check_level_up(giver, g_before, now)
+            giver["last_interaction"] = now
+            self._save(giver_uid, giver)
+            self._save(target_uid, target)
+            return {"ok": True, "giver_score": round(giver["score"], 1),
+                    "target_score": round(target["score"], 1), "received": received}
+
+    def leaderboard(self, top_n: int = 10, now: float | None = None) -> list[dict]:
+        """Global top-N by current (decayed) score. Reads only."""
+        now = now or time.time()
+        index = self.state_store.get("affinity", "global", "index", default=[])
+        rows = []
+        for uid in index[:500]:
+            st = self.get_state(uid, now=now)
+            rows.append({"uid": uid, "score": round(st["score"], 1), "level": st["level"],
+                         "lv": st["lv"], "streak": (st.get("streak") or {}).get("days", 0)})
+        rows.sort(key=lambda r: r["score"], reverse=True)
+        return rows[:max(1, min(int(top_n), 20))]
+
+    @staticmethod
+    def get_titles(state: dict) -> list[str]:
+        """Rule-derived honor titles (computed, never stored)."""
+        titles = []
+        streak = (state.get("streak") or {}).get("days", 0)
+        if streak >= 30:
+            titles.append("连更30天·风雨无阻")
+        elif streak >= 7:
+            titles.append("七日之约 🔥")
+        total = int(state.get("total_interactions", 0))
+        if total >= 5000:
+            titles.append("万语千言")
+        elif total >= 1000:
+            titles.append("千言万语")
+        if float(state.get("peak_score", 0.0)) >= 81:
+            titles.append("挚友认证 💎")
+        granted = state.get("granted") or []
+        if sum(1 for g in granted if str(g).startswith("profile_share:")) >= 3:
+            titles.append("坦诚相待")
+        daily = state.get("daily") or {}
+        if any(e.get("k") == "crit" for e in daily.get("events", [])):
+            titles.append("今日欧皇 ⚡")
+        if (state.get("weekly") or {}).get("done"):
+            titles.append("本周挑战达人 🏅")
+        return titles
+
+    def get_timeline(self, uid: str, days: int = 7) -> list[dict]:
+        """Daily rollups (oldest→newest), up to TIMELINE_LIMIT days back."""
+        timeline = self.state_store.get("affinity", f"user_{uid}", "timeline", default=[])
+        days = max(1, min(int(days), TIMELINE_LIMIT))
+        return timeline[-days:]
 
     def get_state(self, uid: str, now: float | None = None) -> dict[str, Any]:
         """Read-only view with lazy decay applied. Never persists (worker-safe)."""
@@ -366,6 +555,8 @@ class AffinityStore:
         nxt = self.next_level_info(state["score"])
         if nxt:
             state["next_level"] = {"name": nxt[0], "need": nxt[1]}
+        self._roll_weekly(uid, state, now)  # in-memory view only; read path never persists
+        state["titles"] = self.get_titles(state)
         daily = state.get("daily", {})
         state["today_total"] = round(
             float(daily.get("chat_gain", 0.0)) + float(daily.get("event_gain", 0.0))

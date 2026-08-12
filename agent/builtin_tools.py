@@ -98,6 +98,10 @@ def remember_fact_executor(args: dict, msg: Message, store: StateStore) -> dict:
     
     if not fact:
         return {"result": "记录失败：事实内容不能为空。"}
+
+    from store.affinity_store import is_affinity_stat_text
+    if is_affinity_stat_text(fact):
+        return {"result": "拒绝记录：好感度/亲密度分数是实时变化的动态数据，不允许写入长期记忆（会造成陈旧数字污染）。需要分数时请调用 query_affinity 工具实时获取。"}
         
     if scope_type == "group" and msg.context.group_id:
         scope_key = f"group_{msg.context.group_id}"
@@ -227,7 +231,95 @@ def query_affinity_executor(args: dict, msg: Message) -> dict:
     nxt = st.get("next_level")
     if nxt:
         result["next_level"] = f"距离「{nxt['name']}」还差 {nxt['need']} 分"
+    if st.get("titles"):
+        result["titles"] = st["titles"]
+    weekly = st.get("weekly") or {}
+    ch = weekly.get("challenge")
+    if ch:
+        progress = weekly.get(ch["metric"], 0)
+        status = "✅ 已达成" if weekly.get("done") else f"{progress}/{ch['target']}"
+        result["weekly_challenge"] = f"{ch['name']}（{status}，奖励 +{ch['reward']:.0f}）"
     return {"result": result}
+
+
+QUERY_AFFINITY_HISTORY_DEF = ToolDefinition(
+    name="query_affinity_history",
+    description="查询当前用户好感度的变动历史：近几天的分数趋势图、每一笔加减分流水（时间/原因/来源）、按当前速度的升级预测。当用户想知道好感度是怎么变的、为什么涨/掉了、要多久升级时调用。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "days": {"type": "integer", "description": "回看天数，1-30，默认 7"},
+        },
+    },
+)
+
+def query_affinity_history_executor(args: dict, msg: Message) -> dict:
+    from runtime import context
+    if context.affinity_store is None:
+        return {"error": "好感度系统未启用。"}
+    from datetime import datetime
+    from store.affinity_store import render_sparkline
+    days = max(1, min(int(args.get("days") or 7), 30))
+    store = context.affinity_store
+    uid = msg.context.user_id
+    st = store.get_state(uid)
+    timeline = store.get_timeline(uid, days=days)
+
+    result: dict = {"current_score": round(st["score"], 1), "level": f"{st['level']} Lv.{st['lv']}"}
+
+    scores = [t["end_score"] for t in timeline] + [round(st["score"], 1)]
+    if len(scores) >= 2:
+        result["trend"] = f"{render_sparkline(scores)} （{scores[0]} → {scores[-1]}，近{len(scores)}个数据点）"
+    daily_rollups = [
+        f"{t['date']}: 收盘 {t['end_score']}（聊天+{t['chat']} 事件+{t['event']} 情绪{t['llm']:+} 反思{t['refl']:+}）"
+        for t in timeline
+    ]
+    if daily_rollups:
+        result["daily_rollups"] = daily_rollups
+
+    history = st.get("history") or []
+    records = []
+    for h in history[-15:]:
+        ts_str = datetime.fromtimestamp(h.get("ts", 0)).strftime("%m-%d %H:%M")
+        src_map = {"llm": "情绪", "reflection": "夜间反思", "admin": "管理员", "event": "事件"}
+        records.append(f"[{ts_str}] {h.get('delta', 0):+.1f} {h.get('reason', '')}（{src_map.get(h.get('source'), h.get('source'))}）")
+    result["recent_records"] = records or ["暂无变动流水"]
+
+    nxt = st.get("next_level")
+    if nxt and timeline:
+        gains = [t["chat"] + t["event"] + t["llm"] + t["refl"] for t in timeline]
+        avg = sum(gains) / len(gains)
+        if avg > 0.1:
+            import math
+            result["upgrade_eta"] = f"按最近 {len(gains)} 天的平均速度（每天 {avg:+.1f}），约 {math.ceil(nxt['need'] / avg)} 天后升到「{nxt['name']}」"
+        else:
+            result["upgrade_eta"] = f"最近几天几乎没有净增长，距离「{nxt['name']}」还差 {nxt['need']} 分，多来互动吧"
+    return {"result": result}
+
+
+GIFT_AFFINITY_DEF = ToolDefinition(
+    name="gift_affinity",
+    description="替当前用户向另一位用户赠送好感度（对方 +2，赠送者因暖心 +1）。当用户明确表达想把好感度送给某人/请某人喝奶茶之类的赠礼意图时调用。限制：赠送者需达到「熟悉」等级，每天只能送一次。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "target_user_id": {"type": "string", "description": "接收方用户 ID（QQ号）。群聊里可以从发言前缀 (ID: xxx) 获取。"},
+        },
+        "required": ["target_user_id"],
+    },
+)
+
+def gift_affinity_executor(args: dict, msg: Message) -> dict:
+    from runtime import context
+    if context.affinity_store is None:
+        return {"error": "好感度系统未启用。"}
+    target = str(args.get("target_user_id") or "").strip()
+    if not target:
+        return {"error": "缺少 target_user_id。"}
+    r = context.affinity_store.gift(msg.context.user_id, target)
+    if not r.get("ok"):
+        return {"result": f"赠礼失败：{r.get('reason', '未知原因')}"}
+    return {"result": f"赠礼成功 🎁 对方好感度 +{r['received']:.0f}（现 {r['target_score']}），你也因为暖心 +1（现 {r['giver_score']}）。"}
 
 
 ADJUST_AFFINITY_DEF = ToolDefinition(
@@ -1053,6 +1145,16 @@ def register_builtin_tools(registry, message_store: MessageStore, state_store: S
     registry.register_builtin(
         QUERY_AFFINITY_DEF,
         lambda args, msg, sender: query_affinity_executor(args, msg),
+    )
+
+    registry.register_builtin(
+        QUERY_AFFINITY_HISTORY_DEF,
+        lambda args, msg, sender: query_affinity_history_executor(args, msg),
+    )
+
+    registry.register_builtin(
+        GIFT_AFFINITY_DEF,
+        lambda args, msg, sender: gift_affinity_executor(args, msg),
     )
     
     from config import backend_config
