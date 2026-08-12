@@ -88,9 +88,12 @@ class OpenAIResponsesClient(BaseLLMClient):
         if "output" in data and isinstance(data["output"], list):
             for out_item in data["output"]:
                 if out_item.get("type") == "message" and "content" in out_item:
-                    for block in out_item["content"]:
-                        if block.get("type") in ("output_text", "text"):
-                            out_text += block.get("text", "")
+                    if isinstance(out_item["content"], str):
+                        out_text += out_item["content"]
+                    elif isinstance(out_item["content"], list):
+                        for block in out_item["content"]:
+                            if isinstance(block, dict) and block.get("type") in ("output_text", "text"):
+                                out_text += block.get("text", "")
                 elif out_item.get("type") == "tool_call":
                     wire_tool_calls.append(out_item)
                 # Some implementations put tool_calls inside message content
