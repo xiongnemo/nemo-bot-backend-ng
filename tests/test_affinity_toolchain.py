@@ -88,6 +88,19 @@ class TestAffinityToolChain(unittest.TestCase):
         self.assertIn("赠礼成功", obs["result"])
         self.assertEqual(context.affinity_store.get_state("U2")["score"], 2.0)
 
+    def test_report_deed_via_executor(self):
+        from runtime import context
+        obs = self.tool_executor.execute(
+            "report_good_deed",
+            {"category": "学习", "summary": "看了2小时算法书", "suggested_points": 2, "credibility": 1.0},
+            self.msg)
+        self.assertIn("自律打卡成功", obs["result"])
+        self.assertEqual(context.affinity_store.get_state("U1")["score"], 2.0)
+
+    def test_report_deed_visible_to_llm(self):
+        names = [t.name for t in self.registry.get_tools_for_user("onebot", "U1")]
+        self.assertIn("report_good_deed", names)
+
     def test_admin_tool_blocked_for_normal_user(self):
         obs = self.tool_executor.execute("admin_affinity", {"action": "reset", "user_id": "U2"}, self.msg)
         self.assertIn("error", obs)
@@ -111,6 +124,7 @@ class TestAffinityClaimGuard(unittest.TestCase):
         from agent.runner import affinity_claim_without_call
         self.assertFalse(affinity_claim_without_call("好感度+5！现在是 15 分啦", ["adjust_affinity"]))
         self.assertFalse(affinity_claim_without_call("送礼成功，对方好感度+2", ["gift_affinity"]))
+        self.assertFalse(affinity_claim_without_call("打卡成功，好感度+2.4", ["report_good_deed"]))
 
     def test_no_claim_no_trigger(self):
         from agent.runner import affinity_claim_without_call

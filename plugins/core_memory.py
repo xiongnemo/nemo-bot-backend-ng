@@ -48,9 +48,11 @@ _enabled = 1
 
 @generic_exception_handler
 def bot_execute(message: Message, config: dict) -> None:
-    from store.database import Database
-    db = Database(backend_config.get("database", {}).get("path", "data/bot.db"))
-    state_store = StateStore(db)
+    from store.plugin_store import get_plugin_state_store
+    state_store, warning = get_plugin_state_store()
+    if warning:
+        message.reply(f"⚠️ {warning}")
+        return
 
     try:
         args = json.loads(message.request.args)
