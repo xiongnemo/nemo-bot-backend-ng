@@ -102,9 +102,9 @@ class TestReflectionJob(unittest.TestCase):
         self.assertEqual(profile["hobbies"], ["塞尔达"])
         self.assertNotIn("password", profile)
 
-        # Affinity adjusted with reflection daily cap (+3), not the raw +9 per scope
+        # Affinity adjusted with reflection daily cap (+3) from the 0 baseline
         st = context.affinity_store.get_state("111")
-        self.assertAlmostEqual(st["score"], 13.0, places=1)
+        self.assertAlmostEqual(st["score"], 3.0, places=1)
 
         # Ancient conversation row pruned; recent ones retained
         rows = conn.execute("SELECT COUNT(*) FROM conversations WHERE content='ancient'").fetchone()[0]

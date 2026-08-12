@@ -107,9 +107,15 @@ def setup():
     from store.affinity_store import AffinityStore
     from store.profile_store import ProfileStore
     from store.topic_store import TopicStore
-    context.affinity_store = AffinityStore(state_store)
     context.profile_store = ProfileStore(state_store)
+    context.affinity_store = AffinityStore(state_store, profile_store=context.profile_store)
     context.topic_store = TopicStore(db)
+
+    from store.user_thread import UserThreadStore
+    from store.group_digest import GroupDigestStore
+    context.user_thread_store = UserThreadStore(state_store)
+    context.group_digest_store = GroupDigestStore(state_store, db)
+    context.msg_store = msg_store
 
     # 3. LLM
     init_registry(app_config.backend_config.get("llm", {}))
@@ -359,6 +365,16 @@ def _handle_ingest(payload: dict):
         except Exception:
             logger.exception("Affinity tracking failed")
         # --- Affinity Tracking End ---
+
+        # --- Group Ambient Digest (L1) Start ---
+        try:
+            from runtime import context as rt_context
+            if msg.group_id and rt_context.group_digest_store is not None:
+                if rt_context.group_digest_store.record(msg.group_id):
+                    executor.submit_dispatch(rt_context.group_digest_store.compress, msg.group_id)
+        except Exception:
+            logger.exception("Group digest tracking failed")
+        # --- Group Ambient Digest (L1) End ---
 
         if route.mode == "command":
             _execute_command(raw_msg, route)

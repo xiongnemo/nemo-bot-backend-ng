@@ -115,14 +115,14 @@ Agent Execution Rules:
 """
 
     # 3. Dynamic Memory Injection
-    memory_blocks = []
+    memory_blocks: list[tuple[int, str]] = []
     
     # User memory
     user_key = f"user_{msg.context.user_id}"
     user_facts = state_store.get("memory", user_key, "facts", default=[])
     if user_facts:
         facts_str = "\n".join(f"- {f}" for f in user_facts)
-        memory_blocks.append(f"【关于该用户的长期记忆】\n{facts_str}")
+        memory_blocks.append((1, f"【关于该用户的长期记忆】\n{facts_str}"))
 
     # User profile & affinity (per-user workspace, keyed by normalized primary uid)
     try:
@@ -130,19 +130,35 @@ Agent Execution Rules:
         if getattr(rt_context, "profile_store", None) is not None:
             profile_text = rt_context.profile_store.render_for_prompt(msg.context.user_id)
             if profile_text:
-                memory_blocks.append(f"【该用户的画像档案】\n{profile_text}\n（如对话中发现用户新的身份信息、爱好、生日等，请调用 update_profile 工具更新画像。）")
+                memory_blocks.append((1, f"【该用户的画像档案】\n{profile_text}\n（如对话中发现用户新的身份信息、爱好、生日等，请调用 update_profile 工具更新画像。）"))
         if getattr(rt_context, "affinity_store", None) is not None:
             aff = rt_context.affinity_store.get_state(msg.context.user_id)
-            memory_blocks.append(
-                f"【你对该用户的好感度】当前 {aff['score']:.1f}/100，关系等级：{aff['level']}。语气指导：{aff['tone']}\n"
-                f"如果本轮对话中用户的言行让你明显感到温暖或被冒犯，可调用 adjust_affinity 工具微调好感度（±5 以内），平淡的日常对话不要调用。"
-            )
+            surprise = ""
+            specials = [e.get("note") for e in (aff.get("daily") or {}).get("events", [])
+                        if str(e.get("k", "")).startswith("milestone:") or e.get("k") == "birthday"]
+            if specials:
+                surprise = f"\n【惊喜时刻】该用户今天触发了：{'；'.join(specials)}。请在本次回复中自然地祝贺或提及一次（只提一次，别反复念叨）。"
+            memory_blocks.append((1,
+                f"【你对该用户的好感度】当前 {aff['score']:.1f}/100，关系等级：{aff['level']} Lv.{aff.get('lv', 1)}。语气指导：{aff['tone']}\n"
+                f"如果本轮对话中用户的言行让你明显感到温暖或被冒犯，可调用 adjust_affinity 工具微调好感度（±5 以内），平淡的日常对话不要调用。\n"
+                f"【重要】历史对话里出现过的好感度数字都是过期快照。当用户询问好感度/分数/等级/今日明细时，必须调用 query_affinity 工具拿实时数据再回答，严禁凭记忆或上文的旧数字作答。"
+                + surprise
+            ))
+        if getattr(rt_context, "user_thread_store", None) is not None:
+            ut = rt_context.user_thread_store.get_context(msg.context.user_id, in_group=bool(msg.context.group_id))
+            ut_parts = []
+            if ut.get("digest"):
+                ut_parts.append("远期脉络：\n" + "\n".join(f"- {l}" for l in ut["digest"]))
+            if ut.get("recent"):
+                ut_parts.append("最近互动：\n" + "\n".join(f"- {l}" for l in ut["recent"]))
+            if ut_parts:
+                memory_blocks.append((2, "【你与该用户的近期交集】\n" + "\n".join(ut_parts)))
     except Exception:
         pass
 
     has_valid_name = bool(msg.context.user_name and msg.context.user_name != str(msg.context.user_id) and msg.context.user_name.lower() != "unknown")
     if not has_valid_name and not user_facts:
-        memory_blocks.append("【高优先级指令 - 用户初始化引导】\n检测到当前交互的用户还没有初始化个人记忆档案（未知称呼）。请在回复的开头自然地、幽默地引导对方介绍一下自己，并询问系统该如何称呼 Ta，以便你建立个人档案。")
+        memory_blocks.append((0, "【高优先级指令 - 用户初始化引导】\n检测到当前交互的用户还没有初始化个人记忆档案（未知称呼）。请在回复的开头自然地、幽默地引导对方介绍一下自己，并询问系统该如何称呼 Ta，以便你建立个人档案。"))
         
     # Group memory
     if msg.context.group_id:
@@ -167,7 +183,22 @@ Agent Execution Rules:
             group_block.append(f"【关于当前群组的中期情景记忆 (Recent Topics)】\n{topics_str}")
             
         if group_block:
-            memory_blocks.append("\n\n".join(group_block))
+            memory_blocks.append((2, "\n\n".join(group_block)))
+
+        # L1 ambient digest + FTS retrieval (best-effort)
+        try:
+            from runtime import context as rt_context
+            if getattr(rt_context, "group_digest_store", None) is not None:
+                digest_lines = rt_context.group_digest_store.get_lines(msg.context.group_id)
+                if digest_lines:
+                    memory_blocks.append((2, "【群内近况 (Ambient)】以下是群里最近的话题走向，供你保持在场感：\n" + "\n".join(f"- {l}" for l in digest_lines)))
+            if getattr(rt_context, "msg_store", None) is not None:
+                from agent.context_loader import retrieve_related
+                related = retrieve_related(rt_context.msg_store, msg.context.group_id, getattr(msg.request, "args", "") or "")
+                if related:
+                    memory_blocks.append((4, "【可能相关的历史片段 (检索)】\n" + "\n".join(f"- {l}" for l in related)))
+        except Exception:
+            pass
             
     # Inject internal feed channels
     try:
@@ -178,13 +209,18 @@ Agent Execution Rules:
             feed_info = ["【内部资讯频道库 (search_feeds 专用)】", "你可以通过 search_feeds 工具搜索以下内部频道的新闻，请参考以下频道列表："]
             for name, desc in channels:
                 feed_info.append(f"- 频道: {name} (描述: {desc})")
-            memory_blocks.append("\n".join(feed_info))
+            memory_blocks.append((5, "\n".join(feed_info)))
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"Failed to load channels for prompt: {e}")
     memory_section = ""
     if memory_blocks:
-        memory_section = "\n\n" + "\n\n".join(memory_blocks)
+        from agent.context_loader import trim_memory_blocks
+        from config import get_context_config
+        budget = int(get_context_config().get("budget_chars", 6000))
+        trimmed = trim_memory_blocks(memory_blocks, budget)
+        if trimmed:
+            memory_section = "\n\n" + "\n\n".join(trimmed)
         
     # Combine everything
     return identity + context + memory_section

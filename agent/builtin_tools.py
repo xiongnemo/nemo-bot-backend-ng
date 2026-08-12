@@ -181,12 +181,52 @@ def update_profile_executor(args: dict, msg: Message) -> dict:
     from runtime import context
     if context.profile_store is None:
         return {"error": "画像系统未启用。"}
+    field = args.get("field", "")
+    action = args.get("action", "append")
     result = context.profile_store.apply(
-        msg.context.user_id,
-        args.get("field", ""),
-        args.get("action", "append"),
-        args.get("value", ""),
+        msg.context.user_id, field, action, args.get("value", ""),
     )
+    # Sharing personal info is a rewarded affinity event (once per field, ever)
+    if action in ("set", "append") and result.startswith("已更新") and context.affinity_store is not None:
+        try:
+            bonus = context.affinity_store.grant_profile_share(msg.context.user_id, field)
+            if bonus:
+                result += f"（好感度 +{bonus:.0f}：感谢分享！）"
+        except Exception:
+            logger.exception("profile share bonus failed")
+    return {"result": result}
+
+
+QUERY_AFFINITY_DEF = ToolDefinition(
+    name="query_affinity",
+    description="查询你对当前用户的实时好感度：分数、关系等级、连续互动天数、今日加分明细。当用户询问好感度/分数/关系/今天赚了多少好感度时，必须调用此工具获取实时数据后再回答，严禁凭记忆或历史对话里的旧数字作答。",
+    parameters={"type": "object", "properties": {}},
+)
+
+def query_affinity_executor(args: dict, msg: Message) -> dict:
+    from runtime import context
+    if context.affinity_store is None:
+        return {"error": "好感度系统未启用。"}
+    st = context.affinity_store.get_state(msg.context.user_id)
+    daily = st.get("daily", {})
+    events = [f"{e.get('note', '')} +{e.get('pts', 0)}" for e in daily.get("events", [])]
+    chat_gain = float(daily.get("chat_gain", 0.0))
+    if chat_gain:
+        events.append(f"聊天互动 +{chat_gain:.1f}")
+    llm_delta = float(daily.get("llm_delta", 0.0))
+    if llm_delta:
+        events.append(f"情绪调整 {llm_delta:+.1f}")
+    result = {
+        "score": round(st["score"], 1),
+        "level": f"{st['level']} Lv.{st['lv']}",
+        "streak_days": (st.get("streak") or {}).get("days", 0),
+        "total_interactions": st.get("total_interactions", 0),
+        "today_total": st.get("today_total", 0),
+        "today_breakdown": events or ["今日暂无收获"],
+    }
+    nxt = st.get("next_level")
+    if nxt:
+        result["next_level"] = f"距离「{nxt['name']}」还差 {nxt['need']} 分"
     return {"result": result}
 
 
@@ -1008,6 +1048,11 @@ def register_builtin_tools(registry, message_store: MessageStore, state_store: S
     registry.register_builtin(
         ADJUST_AFFINITY_DEF,
         lambda args, msg, sender: adjust_affinity_executor(args, msg),
+    )
+
+    registry.register_builtin(
+        QUERY_AFFINITY_DEF,
+        lambda args, msg, sender: query_affinity_executor(args, msg),
     )
     
     from config import backend_config

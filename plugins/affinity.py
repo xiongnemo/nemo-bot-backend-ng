@@ -1,9 +1,9 @@
 """
-Affinity Plugin (好感度查询)
---------------------------
-Lets a user query their affinity score with the bot. Read-only: the score
-shown includes lazy decay but is never persisted here, because plugins run
-in worker processes and all affinity writes stay in the main process.
+Affinity Plugin (好感度查询) v2
+---------------------------
+Renders a black-frame progress card with level, streak, milestones and a
+"today's gains" breakdown. Read-only: plugins run in worker processes, all
+affinity writes stay in the main process.
 """
 
 import logging
@@ -17,10 +17,15 @@ logger = logging.getLogger(__name__)
 _command = ["查询我的好感度", "查询好感度", "我的好感度", "好感度"]
 _name = "好感度系统"
 _man = (
-    "好感度系统：和 nemo-bot 聊天互动可以慢慢提升好感度，长期不理它会缓慢回落，"
-    "惹它生气还会扣分。\n用法：发送「好感度」「我的好感度」「查询好感度」即可查询当前分数和关系等级。"
+    "好感度系统 v2：和 Nemo 互动会积累好感度——\n"
+    "· 每日第一次互动 +2，连续互动有 streak 加成 🔥\n"
+    "· 聊天互动持续加分（有冷却和每日上限，刷屏没用）\n"
+    "· 分享个人信息（生日/爱好等）、达成互动里程碑有大额奖励\n"
+    "· 生日当天互动有惊喜 🎂\n"
+    "· 让 Nemo 开心/生气会实时加减分；超过 3 天不理它会慢慢降温\n"
+    "发送「好感度」查看你的好感度卡片和今日明细。"
 )
-_tool_description = "查询当前用户与你（bot）之间的好感度分数、关系等级和互动统计。当用户想知道你对 ta 的好感、关系亲密程度或好感度分数时调用。"
+_tool_description = "查询当前用户与你（bot）之间的好感度卡片：分数、关系等级、连续互动天数、今日加分明细。当用户想知道你对 ta 的好感、关系等级或今天赚了多少好感度时调用。"
 _enabled = 1
 
 BAR_WIDTH = 10
@@ -29,7 +34,49 @@ BAR_WIDTH = 10
 def _render_bar(score: float) -> str:
     ratio = max(0.0, min(1.0, score / 100.0))
     filled = round(ratio * BAR_WIDTH)
-    return "█" * filled + "░" * (BAR_WIDTH - filled)
+    return "⬛" * filled + "⬜" * (BAR_WIDTH - filled)
+
+
+def render_card(display_name: str, st: dict) -> str:
+    score = st["score"]
+    lines = [
+        "┏━━━━━━━━━━━━━━━━━━",
+        f"┃ 💗 {display_name} × Nemo",
+        f"┃ {_render_bar(score)} {score:.1f}/100",
+        f"┃ 关系等级：{st['level']} Lv.{st['lv']}",
+    ]
+    nxt = st.get("next_level")
+    if nxt:
+        lines.append(f"┃ 距离「{nxt['name']}」还差 {nxt['need']} 分")
+    streak_days = (st.get("streak") or {}).get("days", 0)
+    total = st.get("total_interactions", 0)
+    lines.append(f"┃ 连续互动：{streak_days} 天 🔥 ｜ 累计 {total} 次")
+
+    lines.append("┣━━━━━━━━━━━━━━━━━━")
+    daily = st.get("daily", {})
+    today_total = st.get("today_total", 0)
+    if today_total:
+        lines.append(f"┃ 今日 {today_total:+.1f}")
+        for e in daily.get("events", []):
+            lines.append(f"┃ ✓ {e.get('note', '')} +{e.get('pts', 0)}")
+        chat_gain = float(daily.get("chat_gain", 0.0))
+        if chat_gain:
+            lines.append(f"┃ ✓ 聊天互动 +{chat_gain:.1f}")
+        llm_delta = float(daily.get("llm_delta", 0.0))
+        if llm_delta:
+            lines.append(f"┃ {'✓' if llm_delta > 0 else '✗'} Nemo 的心情 {llm_delta:+.1f}")
+        refl = float(daily.get("reflection_delta", 0.0))
+        if refl:
+            lines.append(f"┃ ✓ 夜间回顾 {refl:+.1f}")
+    else:
+        lines.append("┃ 今日还没有互动收获，快来聊天吧～")
+
+    history = st.get("history") or []
+    if history:
+        last = history[-1]
+        lines.append(f"┃ 最近变动：{last.get('delta', 0):+.1f}（{last.get('reason', '未知')}）")
+    lines.append("┗━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
 
 
 @generic_exception_handler
@@ -37,28 +84,16 @@ def bot_execute(message: Message, config: dict) -> None:
     from store.database import Database
     from store.state_store import StateStore
     from store.affinity_store import AffinityStore
+    from store.profile_store import ProfileStore
 
     db = Database(backend_config.get("database", {}).get("path", "data/nemo.sqlite"))
     state_store = StateStore(db)
 
-    # Normalize cross-platform identity (the command path does not go through
-    # the agent runner, so we resolve the primary uid here ourselves).
+    # Normalize cross-platform identity (command path bypasses the agent runner)
     platform = get_platform(message.frontend)
     link_key = f"{platform}:{message.context.user_id}"
     uid = state_store.get("user_link", "global", link_key, default=message.context.user_id)
 
-    store = AffinityStore(state_store)
+    store = AffinityStore(state_store, profile_store=ProfileStore(state_store))
     st = store.get_state(uid)
-    score = st["score"]
-
-    lines = [
-        f"💗 {message.context.user_name or uid} 与 Nemo 的好感度",
-        f"{_render_bar(score)} {score:.1f}/100",
-        f"关系等级：{st['level']}",
-        f"累计互动：{st.get('total_interactions', 0)} 次",
-    ]
-    history = st.get("history") or []
-    if history:
-        last = history[-1]
-        lines.append(f"最近变动：{last.get('delta', 0):+.1f}（{last.get('reason', '未知')}）")
-    message.reply("\n".join(lines))
+    message.reply(render_card(message.context.user_name or str(uid), st))

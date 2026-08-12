@@ -199,6 +199,46 @@ def manage_acl_executor(args: dict, msg: Message, state_store: StateStore) -> di
     state_store.set("acl", f"plugin_{plugin_name}", list_type, current_list)
     return {"status": "success", "plugin": plugin_name, list_type: current_list}
 
+# Affinity Administration
+ADMIN_AFFINITY_DEF = ToolDefinition(
+    name="admin_affinity",
+    description="【管理员】好感度管理：将指定用户的好感度设定为精确值（set），或彻底清零重置（reset，从零开始重新积累）。仅限超级用户使用。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["set", "reset"], "description": "set: 设定为指定分数；reset: 清空该用户全部好感度状态（分数/streak/里程碑/流水）"},
+            "user_id": {"type": "string", "description": "目标用户 ID（QQ号等，若对方有 user_link 绑定请填主账号 ID）"},
+            "score": {"type": "number", "description": "目标分数，仅 action=set 时需要，范围 -20 到 100"},
+            "reason": {"type": "string", "description": "调整原因，会记入好感度流水"},
+        },
+        "required": ["action", "user_id"],
+    },
+)
+
+def admin_affinity_executor(args: dict, msg: Message) -> dict:
+    from runtime import context
+    if context.affinity_store is None:
+        return {"error": "好感度系统未启用。"}
+    action = args.get("action")
+    uid = str(args.get("user_id") or "").strip()
+    if not uid:
+        return {"error": "缺少 user_id。"}
+    if action == "set":
+        if args.get("score") is None:
+            return {"error": "set 操作需要提供 score。"}
+        r = context.affinity_store.set_score(
+            uid, float(args["score"]),
+            reason=args.get("reason") or "管理员设定",
+            operator=str(msg.context.user_id),
+        )
+        return {"result": f"已将用户 {uid} 的好感度从 {r['old_score']} 设定为 {r['score']:.1f}（{r['level']}）。"}
+    elif action == "reset":
+        existed = context.affinity_store.reset(uid)
+        return {"result": f"已重置用户 {uid} 的好感度状态，从零开始重新积累。" if existed
+                else f"用户 {uid} 本来就没有好感度记录，无需重置。"}
+    return {"error": f"未知 action: {action}"}
+
+
 def register_superuser_tools(registry, state_store: StateStore):
     """Register all superuser tools with injected dependencies."""
     
@@ -217,5 +257,11 @@ def register_superuser_tools(registry, state_store: StateStore):
     registry.register_builtin(
         MANAGE_ACL_DEF,
         lambda args, msg, sender: manage_acl_executor(args, msg, state_store),
+        requires_superuser=True,
+    )
+
+    registry.register_builtin(
+        ADMIN_AFFINITY_DEF,
+        lambda args, msg, sender: admin_affinity_executor(args, msg),
         requires_superuser=True,
     )

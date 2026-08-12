@@ -127,25 +127,13 @@ class AgentRunner:
         # We manually manage the loop here rather than just calling memory.chat() once,
         # because we need to handle multiple tool call steps within a single "turn".
         
-        # 1. Load history
-        history_dicts = self.memory.store.get_history(scope_key, max_turns=30)
-        messages: list[ChatMessage] = []
-        for d in history_dicts:
-            meta = d.get("metadata") or {}
-            tc_data = meta.get("tool_calls")
-            tcs = None
-            if tc_data:
-                from nemollm.types import ToolCall
-                tcs = [ToolCall(**tc) for tc in tc_data]
-            
-            messages.append(ChatMessage(
-                role=d["role"], 
-                content=d["content"], 
-                tool_calls=tcs,
-                tool_call_id=meta.get("tool_call_id"),
-                name=meta.get("name")
-            ))
-            
+        # 1. Load history (L2: speaker-weighted for group scopes)
+        from agent.context_loader import load_weighted_history
+        from config import get_context_config
+        messages = load_weighted_history(
+            self.memory.store, scope_key, uid, bool(gid),
+            cfg=get_context_config().get("history", {}),
+        )
         messages = _sanitize_messages(messages)
         
         all_imgs = list(message.request.imgs)
@@ -290,7 +278,7 @@ class AgentRunner:
             return [Action(kind="reply", text="[Nemo] 我想太久了，脑袋有点晕...")]
             
         # 4. Save to DB
-        self.memory.store.append(scope_key, role="user", content=formatted_query)
+        self.memory.store.append(scope_key, role="user", content=formatted_query, metadata={"user_id": uid})
         for m in new_messages_for_db:
             meta = {}
             if m.tool_calls:
@@ -311,6 +299,29 @@ class AgentRunner:
                 metadata=meta,
             )
             
+        # L3: record this turn into the per-user thread and maybe compress
+        try:
+            from runtime import context as rt_context
+            if rt_context.user_thread_store is not None:
+                tool_names = []
+                for m in new_messages_for_db:
+                    for tc in (getattr(m, "tool_calls", None) or []):
+                        tool_names.append(tc.name)
+                events = []
+                if "adjust_affinity" in tool_names:
+                    events.append("affinity")
+                if "update_profile" in tool_names:
+                    events.append("profile")
+                scene = f"group:{gid}" if gid else "dm"
+                answer_text = (resp.text or "") if resp else ""
+                rt_context.user_thread_store.append_turn(
+                    uid, scene, query, answer_text, tools=tool_names, events=events
+                )
+                if rt_context.user_thread_store.should_compress(uid) and rt_context.executor is not None:
+                    rt_context.executor.submit_dispatch(rt_context.user_thread_store.compress, uid)
+        except Exception:
+            logger.exception("user_thread tracking failed")
+
         final_actions = []
         if resp and resp.text and resp.text.strip():
             final_text = resp.text.strip()
