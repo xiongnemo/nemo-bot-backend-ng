@@ -54,7 +54,14 @@ DEFAULTS: dict[str, float] = {
     # fun: chat-gain critical hit (once per day)
     "crit_chance": 0.05,
     "crit_multiplier": 2.0,
+    # good-deed reports (user self-reported positive behavior, LLM-verified)
+    "deed_single_cap": 3.0,
+    "deed_daily_cap": 3.0,
+    "deed_weekly_cap": 10.0,
+    "deed_min_credibility": 0.5,
 }
+
+DEED_CATEGORIES = ["学习", "工作", "运动", "健康", "生活", "助人", "其他"]
 
 # Weekly challenges: deterministic per (uid, iso-week), lazily evaluated
 CHALLENGES: list[dict] = [
@@ -211,7 +218,7 @@ class AffinityStore:
                     "refl": round(float(daily.get("reflection_delta", 0.0)), 1),
                 })
                 self.state_store.set("affinity", f"user_{uid}", "timeline", timeline[-TIMELINE_LIMIT:])
-            daily = {"date": today, "chat_gain": 0.0, "event_gain": 0.0,
+            daily = {"date": today, "chat_gain": 0.0, "event_gain": 0.0, "deed_gain": 0.0,
                      "llm_delta": 0.0, "reflection_delta": 0.0, "events": []}
             state["daily"] = daily
         return daily
@@ -227,7 +234,8 @@ class AffinityStore:
             import hashlib
             idx = int(hashlib.md5(f"{uid}:{week}".encode()).hexdigest(), 16) % len(CHALLENGES)
             weekly = {"week": week, "interactions": 0, "days_active": 0, "gain": 0.0,
-                      "last_active_date": "", "challenge": dict(CHALLENGES[idx]), "done": False}
+                      "deed_gain": 0.0, "last_active_date": "",
+                      "challenge": dict(CHALLENGES[idx]), "done": False}
             state["weekly"] = weekly
         return weekly
 
@@ -464,6 +472,57 @@ class AffinityStore:
             self.state_store.delete("affinity", f"user_{uid}", "timeline")
             return self.state_store.delete("affinity", f"user_{uid}", STATE_KEY)
 
+    def report_deed(self, uid: str, category: str, summary: str,
+                    suggested_points: float, credibility: float,
+                    now: float | None = None) -> dict[str, Any]:
+        """User-reported positive behavior (studied/worked N hours etc.),
+        pre-verified by the LLM. Hard rule caps make prompt-tricking the
+        model insufficient to farm points:
+        - credibility gate (below threshold -> rejected)
+        - reward = clamp(points, 1..single_cap) * credibility
+        - one report per category per day; daily and weekly channel caps
+        """
+        now = now or time.time()
+        category = category if category in DEED_CATEGORIES else "其他"
+        summary = (summary or "").strip()[:60]
+        with self._lock:
+            cfg = self._cfg()
+            state = self._load(uid, now, archive=True)
+            self._apply_decay(state, now, cfg)
+            daily = state["daily"]
+            weekly = self._roll_weekly(uid, state, now)
+
+            cred = max(0.0, min(1.0, float(credibility)))
+            if cred < cfg["deed_min_credibility"]:
+                return {"ok": False, "reason": "可信度不足：请先和用户聊聊细节（做了什么/多久/有什么收获），确认真实后再奖励。"}
+            if any(e.get("k") == f"deed:{category}" for e in daily["events"]):
+                return {"ok": False, "reason": f"今天已经奖励过「{category}」类的汇报了，同类事项每天只认一次。"}
+
+            base = max(1.0, min(float(suggested_points), cfg["deed_single_cap"]))
+            points = round(base * cred, 1)
+            day_room = cfg["deed_daily_cap"] - float(daily.get("deed_gain", 0.0))
+            week_room = cfg["deed_weekly_cap"] - float(weekly.get("deed_gain", 0.0))
+            points = round(max(0.0, min(points, day_room, week_room)), 1)
+            if points <= 0:
+                return {"ok": False, "reason": "今日/本周的自律奖励额度已用完，明天再来吧（额度防刷，不针对你）。"}
+
+            score_before = float(state["score"])
+            state["score"] = self._clamp(state["score"] + points, cfg)
+            daily["deed_gain"] = round(float(daily.get("deed_gain", 0.0)) + points, 1)
+            weekly["deed_gain"] = round(float(weekly.get("deed_gain", 0.0)) + points, 1)
+            note = f"自律打卡[{category}]：{summary} ✨"
+            daily["events"].append({"k": f"deed:{category}", "pts": points, "note": note})
+            history = state.get("history") or []
+            history.append({"ts": now, "delta": points, "reason": note, "source": "deed"})
+            state["history"] = history[-HISTORY_LIMIT:]
+            self._check_level_up(state, score_before, now)
+            state["last_interaction"] = now
+            self._save(uid, state)
+            name, _, _ = self.get_level(state["score"])
+            return {"ok": True, "points": points, "score": round(state["score"], 1), "level": name,
+                    "day_remaining": round(cfg["deed_daily_cap"] - daily["deed_gain"], 1),
+                    "week_remaining": round(cfg["deed_weekly_cap"] - weekly["deed_gain"], 1)}
+
     def gift(self, giver_uid: str, target_uid: str, now: float | None = None) -> dict[str, Any]:
         """User-to-user gift: recipient +2, giver +1 (warmth is mutual).
         Anti-abuse: giver once per day; requires giver level >= 熟悉(21)."""
@@ -560,5 +619,6 @@ class AffinityStore:
         daily = state.get("daily", {})
         state["today_total"] = round(
             float(daily.get("chat_gain", 0.0)) + float(daily.get("event_gain", 0.0))
+            + float(daily.get("deed_gain", 0.0))
             + float(daily.get("llm_delta", 0.0)) + float(daily.get("reflection_delta", 0.0)), 1)
         return state

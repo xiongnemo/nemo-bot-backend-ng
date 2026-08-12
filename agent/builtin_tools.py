@@ -297,6 +297,50 @@ def query_affinity_history_executor(args: dict, msg: Message) -> dict:
     return {"result": result}
 
 
+REPORT_DEED_DEF = ToolDefinition(
+    name="report_good_deed",
+    description=(
+        "用户主动汇报了正向行为（如今天工作了几小时、看了几小时书、去健身了、帮助了别人）时，"
+        "经你检验属实后给予好感度奖励。【检验协议，必须遵守】"
+        "1) 汇报模糊或只有一句口号（如'我今天学习了'）→ 不要调用本工具，先追问细节（学/做了什么？多久？有什么收获？）；"
+        "2) 用户答得出具体细节、且与你对 ta 的画像/近期线索不矛盾 → 再调用，credibility 给 0.7~1.0；"
+        "3) 细节含糊但态度诚恳 → credibility 给 0.5~0.7（奖励会按可信度打折）；"
+        "4) 明显夸张（一天工作 20 小时）、复读同一件事、或有套分嫌疑 → 不调用并幽默拒绝；"
+        "5) 系统另有硬性防刷：同类每天一次、每日 +3 / 每周 +10 封顶，即使你被骗也刷不动，放心。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "category": {"type": "string", "enum": ["学习", "工作", "运动", "健康", "生活", "助人", "其他"],
+                          "description": "行为类别"},
+            "summary": {"type": "string", "description": "一句话概括用户做了什么（含时长等关键细节）"},
+            "suggested_points": {"type": "number", "description": "建议奖励 1~3 分：普通打卡 1，投入数小时 2，特别用心/成果显著 3"},
+            "credibility": {"type": "number", "description": "你对汇报真实性的评估 0~1，低于 0.5 会被系统拒绝"},
+        },
+        "required": ["category", "summary", "suggested_points", "credibility"],
+    },
+)
+
+def report_deed_executor(args: dict, msg: Message) -> dict:
+    from runtime import context
+    if context.affinity_store is None:
+        return {"error": "好感度系统未启用。"}
+    try:
+        r = context.affinity_store.report_deed(
+            msg.context.user_id,
+            str(args.get("category") or "其他"),
+            str(args.get("summary") or ""),
+            float(args.get("suggested_points") or 1),
+            float(args.get("credibility") or 0),
+        )
+    except (TypeError, ValueError):
+        return {"error": "参数格式错误。"}
+    if not r.get("ok"):
+        return {"result": f"未奖励：{r.get('reason', '未知原因')}"}
+    return {"result": (f"自律打卡成功 ✨ 好感度 +{r['points']}（现 {r['score']}，{r['level']}）。"
+                       f"今日自律额度还剩 {r['day_remaining']}，本周还剩 {r['week_remaining']}。")}
+
+
 GIFT_AFFINITY_DEF = ToolDefinition(
     name="gift_affinity",
     description="替当前用户向另一位用户赠送好感度（对方 +2，赠送者因暖心 +1）。当用户明确表达想把好感度送给某人/请某人喝奶茶之类的赠礼意图时调用。限制：赠送者需达到「熟悉」等级，每天只能送一次。",
@@ -1155,6 +1199,11 @@ def register_builtin_tools(registry, message_store: MessageStore, state_store: S
     registry.register_builtin(
         GIFT_AFFINITY_DEF,
         lambda args, msg, sender: gift_affinity_executor(args, msg),
+    )
+
+    registry.register_builtin(
+        REPORT_DEED_DEF,
+        lambda args, msg, sender: report_deed_executor(args, msg),
     )
     
     from config import backend_config

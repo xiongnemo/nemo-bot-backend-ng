@@ -7,7 +7,7 @@ when available; otherwise user ids are masked for privacy. Read-only.
 
 import logging
 
-from config import backend_config, get_platform
+from config import get_platform
 from core.message import Message
 from utilities import generic_exception_handler
 
@@ -46,13 +46,14 @@ def render_rank(rows: list, my_uid: str, profile_store) -> str:
 
 @generic_exception_handler
 def bot_execute(message: Message, config: dict) -> None:
-    from store.database import Database
-    from store.state_store import StateStore
+    from store.plugin_store import get_plugin_state_store
     from store.affinity_store import AffinityStore
     from store.profile_store import ProfileStore
 
-    db = Database(backend_config.get("database", {}).get("path", "data/nemo.sqlite"))
-    state_store = StateStore(db)
+    state_store, warning = get_plugin_state_store()
+    if warning:
+        message.reply(f"⚠️ {warning}")
+        return
 
     platform = get_platform(message.frontend)
     link_key = f"{platform}:{message.context.user_id}"

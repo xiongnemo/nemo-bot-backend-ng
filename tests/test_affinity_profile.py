@@ -367,6 +367,55 @@ class TestAffinityStoreV2(StoreTestBase):
                    if not is_affinity_stat_text(f)]
         self.assertEqual(visible, ["职业是程序员"])
 
+    def test_deed_reward_scaled_by_credibility(self):
+        r = self.store.report_deed("u1", "学习", "看了3小时《SICP》", 3, 0.8, now=T0)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["points"], 2.4)  # 3 * 0.8
+        st = self.store.get_state("u1", now=T0 + 1)
+        self.assertEqual(st["score"], 2.4)
+        self.assertTrue(any(h["source"] == "deed" for h in st["history"]))
+        self.assertTrue(any("自律打卡" in e["note"] for e in st["daily"]["events"]))
+
+    def test_deed_low_credibility_rejected(self):
+        r = self.store.report_deed("u1", "工作", "上了一天班", 3, 0.3, now=T0)
+        self.assertFalse(r["ok"])
+        self.assertIn("可信度不足", r["reason"])
+        self.assertEqual(self.store.get_state("u1", now=T0 + 1)["score"], 0.0)
+
+    def test_deed_once_per_category_per_day(self):
+        self.assertTrue(self.store.report_deed("u1", "学习", "看书2小时", 2, 1.0, now=T0)["ok"])
+        r2 = self.store.report_deed("u1", "学习", "又看了1小时", 2, 1.0, now=T0 + 3600)
+        self.assertFalse(r2["ok"])
+        self.assertIn("每天只认一次", r2["reason"])
+        # 不同类别当天仍可
+        self.assertTrue(self.store.report_deed("u1", "运动", "跑了5公里", 2, 1.0, now=T0 + 3600)["ok"])
+        # 第二天同类恢复
+        self.assertTrue(self.store.report_deed("u1", "学习", "看书1小时", 1, 1.0, now=T0 + DAY)["ok"])
+
+    def test_deed_daily_and_weekly_caps(self):
+        # daily cap 3: 学习3分后，运动只能拿到 0
+        self.assertEqual(self.store.report_deed("u1", "学习", "x", 3, 1.0, now=T0)["points"], 3.0)
+        r = self.store.report_deed("u1", "运动", "y", 3, 1.0, now=T0 + 1)
+        self.assertFalse(r["ok"])
+        self.assertIn("额度已用完", r["reason"])
+        # weekly cap 10: 连续 4 天每天 3 分，第 4 天只剩 1
+        total = 3.0
+        for d in range(1, 4):
+            r = self.store.report_deed("u1", "学习", "x", 3, 1.0, now=T0 + d * DAY)
+            if r["ok"]:
+                total += r["points"]
+        self.assertLessEqual(total, 10.0)
+
+    def test_deed_suggested_points_clamped(self):
+        r = self.store.report_deed("u1", "学习", "刷了一道题", 99, 1.0, now=T0)
+        self.assertEqual(r["points"], 3.0)  # single cap
+
+    def test_deed_invalid_category_normalized(self):
+        r = self.store.report_deed("u1", "睡觉", "睡了个好觉", 1, 1.0, now=T0)
+        self.assertTrue(r["ok"])
+        st = self.store.get_state("u1", now=T0 + 1)
+        self.assertTrue(any(e["k"] == "deed:其他" for e in st["daily"]["events"]))
+
     def test_get_state_is_readonly(self):
         self.store.adjust("u1", 60, "t", source="system", now=T0)
         self.store.get_state("u1", now=T0 + 100 * DAY)

@@ -4,10 +4,13 @@
 # 默认使用内存通信 (inproc://nemo-kv)，有效避免跨线程/跨进程 SQLite 锁冲突。
 # 也可以配置为 TCP socket (例如 tcp://127.0.0.1:5555) 供跨进程或跨服务器访问。
 # backend 支持: "sqlite" (默认兼容模式) 或 "rocksdb" (LSM-Tree 高性能存储，基于 rocksdict whl)。
+# ⚠️ 注意：backend 为 rocksdb 时，endpoint 必须用 tcp://（如 tcp://127.0.0.1:5556），
+# 否则插件子进程（好感度/核心记忆等命令）无法读取真实数据，会一直看到初始值。
+# inproc 仅主进程可达，只适合 backend=sqlite（此时插件可直接读同一张 SQLite 表）。
 storage:
   enabled: true
   backend: "rocksdb"
-  endpoint: "inproc://nemo-kv"
+  endpoint: "tcp://127.0.0.1:5556"
   rocksdb_path: "data/nemo_rocksdb"
 
 agent:

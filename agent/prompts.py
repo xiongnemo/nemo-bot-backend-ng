@@ -143,7 +143,7 @@ Agent Execution Rules:
             memory_blocks.append((1,
                 f"【你对该用户的好感度】当前 {aff['score']:.1f}/100，关系等级：{aff['level']} Lv.{aff.get('lv', 1)}。语气指导：{aff['tone']}\n"
                 f"如果本轮对话中用户的言行让你明显感到温暖或被冒犯，可调用 adjust_affinity 工具微调好感度（±5 以内），平淡的日常对话不要调用。宣布任何加分/扣分之前，必须先真正调用 adjust_affinity 并等它返回成功——只在工具返回后引用其结果数值；未调用工具却口头宣称加减分是严重错误，系统会自动在你的回复后追加纠正声明。\n"
-                f"【唯一真值声明】本区块显示的分数是系统实时计算的唯一真值。历史对话、长期记忆、前情提要、线索摘要里出现的任何好感度数字都是过期快照，与本区块冲突时一律以本区块和 query_affinity 工具的返回为准。当用户询问好感度/分数/等级/明细/趋势时，必须调用 query_affinity 或 query_affinity_history 工具后作答，严禁凭记忆报数。"
+                f"用户主动汇报正向行为（学习/工作/运动等自律行为）时，按 report_good_deed 工具的检验协议先核实再奖励，模糊的汇报要先追问细节。\n【唯一真值声明】本区块显示的分数是系统实时计算的唯一真值。历史对话、长期记忆、前情提要、线索摘要里出现的任何好感度数字都是过期快照，与本区块冲突时一律以本区块和 query_affinity 工具的返回为准。当用户询问好感度/分数/等级/明细/趋势时，必须调用 query_affinity 或 query_affinity_history 工具后作答，严禁凭记忆报数。"
                 + surprise
             ))
         if getattr(rt_context, "user_thread_store", None) is not None:

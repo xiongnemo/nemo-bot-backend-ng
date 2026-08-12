@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 import re as _re
 
 AFFINITY_CLAIM_RE = _re.compile(r"好感度?\s*(?:[+＋\-－]|加了?|减了?|扣了?)\s*\d")
-AFFINITY_WRITE_TOOLS = {"adjust_affinity", "gift_affinity", "admin_affinity"}
+AFFINITY_WRITE_TOOLS = {"adjust_affinity", "gift_affinity", "admin_affinity", "report_good_deed"}
 
 
 def affinity_claim_without_call(reply_text: str, turn_tool_names: list[str]) -> bool:
