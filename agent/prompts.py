@@ -133,9 +133,15 @@ Agent Execution Rules:
                 memory_blocks.append((1, f"【该用户的画像档案】\n{profile_text}\n（如对话中发现用户新的身份信息、爱好、生日等，请调用 update_profile 工具更新画像。）"))
         if getattr(rt_context, "affinity_store", None) is not None:
             aff = rt_context.affinity_store.get_state(msg.context.user_id)
+            surprise = ""
+            specials = [e.get("note") for e in (aff.get("daily") or {}).get("events", [])
+                        if str(e.get("k", "")).startswith("milestone:") or e.get("k") == "birthday"]
+            if specials:
+                surprise = f"\n【惊喜时刻】该用户今天触发了：{'；'.join(specials)}。请在本次回复中自然地祝贺或提及一次（只提一次，别反复念叨）。"
             memory_blocks.append((1,
-                f"【你对该用户的好感度】当前 {aff['score']:.1f}/100，关系等级：{aff['level']}。语气指导：{aff['tone']}\n"
+                f"【你对该用户的好感度】当前 {aff['score']:.1f}/100，关系等级：{aff['level']} Lv.{aff.get('lv', 1)}。语气指导：{aff['tone']}\n"
                 f"如果本轮对话中用户的言行让你明显感到温暖或被冒犯，可调用 adjust_affinity 工具微调好感度（±5 以内），平淡的日常对话不要调用。"
+                + surprise
             ))
         if getattr(rt_context, "user_thread_store", None) is not None:
             ut = rt_context.user_thread_store.get_context(msg.context.user_id, in_group=bool(msg.context.group_id))

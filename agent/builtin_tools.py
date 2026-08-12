@@ -181,12 +181,19 @@ def update_profile_executor(args: dict, msg: Message) -> dict:
     from runtime import context
     if context.profile_store is None:
         return {"error": "画像系统未启用。"}
+    field = args.get("field", "")
+    action = args.get("action", "append")
     result = context.profile_store.apply(
-        msg.context.user_id,
-        args.get("field", ""),
-        args.get("action", "append"),
-        args.get("value", ""),
+        msg.context.user_id, field, action, args.get("value", ""),
     )
+    # Sharing personal info is a rewarded affinity event (once per field, ever)
+    if action in ("set", "append") and result.startswith("已更新") and context.affinity_store is not None:
+        try:
+            bonus = context.affinity_store.grant_profile_share(msg.context.user_id, field)
+            if bonus:
+                result += f"（好感度 +{bonus:.0f}：感谢分享！）"
+        except Exception:
+            logger.exception("profile share bonus failed")
     return {"result": result}
 
 

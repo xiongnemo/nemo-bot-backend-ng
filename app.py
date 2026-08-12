@@ -107,8 +107,8 @@ def setup():
     from store.affinity_store import AffinityStore
     from store.profile_store import ProfileStore
     from store.topic_store import TopicStore
-    context.affinity_store = AffinityStore(state_store)
     context.profile_store = ProfileStore(state_store)
+    context.affinity_store = AffinityStore(state_store, profile_store=context.profile_store)
     context.topic_store = TopicStore(db)
 
     from store.user_thread import UserThreadStore
