@@ -7,7 +7,7 @@
 storage:
   enabled: true
   backend: "rocksdb"
-  endpoint: "inproc://nemo-kv"
+  endpoint: "tcp://127.0.0.1:42166"
   rocksdb_path: "data/nemo_rocksdb"
 
 agent:
