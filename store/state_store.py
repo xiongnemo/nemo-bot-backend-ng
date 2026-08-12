@@ -28,6 +28,19 @@ class StateStore:
                 return context.state_store
         except Exception:
             pass
+            
+        try:
+            from config import backend_config
+            storage_cfg = backend_config.get("storage", {})
+            if storage_cfg.get("enabled", False):
+                if not hasattr(self, "_worker_zmq_client"):
+                    from store.zmq_client import ZmqStateStore
+                    endpoint = storage_cfg.get("endpoint", "tcp://127.0.0.1:5555")
+                    self._worker_zmq_client = ZmqStateStore(endpoint=endpoint)
+                return self._worker_zmq_client
+        except Exception:
+            pass
+
         return None
 
     # ------------------------------------------------------------------
