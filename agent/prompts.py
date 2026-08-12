@@ -140,7 +140,8 @@ Agent Execution Rules:
                 surprise = f"\n【惊喜时刻】该用户今天触发了：{'；'.join(specials)}。请在本次回复中自然地祝贺或提及一次（只提一次，别反复念叨）。"
             memory_blocks.append((1,
                 f"【你对该用户的好感度】当前 {aff['score']:.1f}/100，关系等级：{aff['level']} Lv.{aff.get('lv', 1)}。语气指导：{aff['tone']}\n"
-                f"如果本轮对话中用户的言行让你明显感到温暖或被冒犯，可调用 adjust_affinity 工具微调好感度（±5 以内），平淡的日常对话不要调用。"
+                f"如果本轮对话中用户的言行让你明显感到温暖或被冒犯，可调用 adjust_affinity 工具微调好感度（±5 以内），平淡的日常对话不要调用。\n"
+                f"【重要】历史对话里出现过的好感度数字都是过期快照。当用户询问好感度/分数/等级/今日明细时，必须调用 query_affinity 工具拿实时数据再回答，严禁凭记忆或上文的旧数字作答。"
                 + surprise
             ))
         if getattr(rt_context, "user_thread_store", None) is not None:

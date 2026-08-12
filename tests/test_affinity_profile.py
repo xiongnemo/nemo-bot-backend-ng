@@ -163,6 +163,45 @@ class TestAffinityStoreV2(StoreTestBase):
         self.store.adjust("u1", -500, "awful", source="system", now=T0 + 1)
         self.assertEqual(self.store.get_state("u1", now=T0 + 1)["score"], -20.0)
 
+    def test_admin_set_and_reset(self):
+        self.store.record_message("u1", engaged=True, now=T0)
+        r = self.store.set_score("u1", 75, reason="补偿", operator="admin1", now=T0 + 1)
+        self.assertEqual(r["score"], 75.0)
+        self.assertEqual(r["level"], "朋友")
+        st = self.store.get_state("u1", now=T0 + 2)
+        self.assertEqual(st["history"][-1]["source"], "admin")
+        self.assertIn("admin1", st["history"][-1]["reason"])
+        # reset wipes everything back to zero
+        self.assertTrue(self.store.reset("u1"))
+        st2 = self.store.get_state("u1", now=T0 + 3)
+        self.assertEqual(st2["score"], 0.0)
+        self.assertEqual(st2["total_interactions"], 0)
+        self.assertFalse(self.store.reset("u1"))  # nothing left to delete
+
+    def test_query_affinity_tool(self):
+        from runtime import context
+        from agent.builtin_tools import query_affinity_executor
+        saved = context.affinity_store
+        context.affinity_store = self.store
+        try:
+            import time
+            self.store.record_message("u1", engaged=True, now=time.time() - 30)
+
+            class Ctx:
+                user_id = "u1"
+                group_id = ""
+
+            class Msg:
+                context = Ctx()
+
+            out = query_affinity_executor({}, Msg())
+            r = out["result"]
+            self.assertEqual(r["score"], 3.0)
+            self.assertIn("陌生", r["level"])
+            self.assertTrue(any("每日初见" in x for x in r["today_breakdown"]))
+        finally:
+            context.affinity_store = saved
+
     def test_get_state_is_readonly(self):
         self.store.adjust("u1", 60, "t", source="system", now=T0)
         self.store.get_state("u1", now=T0 + 100 * DAY)

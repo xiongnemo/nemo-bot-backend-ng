@@ -197,6 +197,39 @@ def update_profile_executor(args: dict, msg: Message) -> dict:
     return {"result": result}
 
 
+QUERY_AFFINITY_DEF = ToolDefinition(
+    name="query_affinity",
+    description="查询你对当前用户的实时好感度：分数、关系等级、连续互动天数、今日加分明细。当用户询问好感度/分数/关系/今天赚了多少好感度时，必须调用此工具获取实时数据后再回答，严禁凭记忆或历史对话里的旧数字作答。",
+    parameters={"type": "object", "properties": {}},
+)
+
+def query_affinity_executor(args: dict, msg: Message) -> dict:
+    from runtime import context
+    if context.affinity_store is None:
+        return {"error": "好感度系统未启用。"}
+    st = context.affinity_store.get_state(msg.context.user_id)
+    daily = st.get("daily", {})
+    events = [f"{e.get('note', '')} +{e.get('pts', 0)}" for e in daily.get("events", [])]
+    chat_gain = float(daily.get("chat_gain", 0.0))
+    if chat_gain:
+        events.append(f"聊天互动 +{chat_gain:.1f}")
+    llm_delta = float(daily.get("llm_delta", 0.0))
+    if llm_delta:
+        events.append(f"情绪调整 {llm_delta:+.1f}")
+    result = {
+        "score": round(st["score"], 1),
+        "level": f"{st['level']} Lv.{st['lv']}",
+        "streak_days": (st.get("streak") or {}).get("days", 0),
+        "total_interactions": st.get("total_interactions", 0),
+        "today_total": st.get("today_total", 0),
+        "today_breakdown": events or ["今日暂无收获"],
+    }
+    nxt = st.get("next_level")
+    if nxt:
+        result["next_level"] = f"距离「{nxt['name']}」还差 {nxt['need']} 分"
+    return {"result": result}
+
+
 ADJUST_AFFINITY_DEF = ToolDefinition(
     name="adjust_affinity",
     description="微调你对当前用户的好感度。仅当用户的言行让你产生明显情绪波动时调用：温暖/贴心/有趣的举动加分（正数），无礼/冒犯/恶意的言行扣分（负数）。单次幅度 ±5 以内，每日总额受限。平淡的日常对话不要调用。",
@@ -1015,6 +1048,11 @@ def register_builtin_tools(registry, message_store: MessageStore, state_store: S
     registry.register_builtin(
         ADJUST_AFFINITY_DEF,
         lambda args, msg, sender: adjust_affinity_executor(args, msg),
+    )
+
+    registry.register_builtin(
+        QUERY_AFFINITY_DEF,
+        lambda args, msg, sender: query_affinity_executor(args, msg),
     )
     
     from config import backend_config

@@ -327,6 +327,31 @@ class AffinityStore:
             name, _, _ = self.get_level(state["score"])
             return {"score": state["score"], "level": name, "applied_delta": round(float(delta), 2)}
 
+    def set_score(self, uid: str, score: float, reason: str = "管理员设定",
+                  operator: str = "", now: float | None = None) -> dict[str, Any]:
+        """Admin: pin the score to an exact value (bypasses caps, audited in history)."""
+        now = now or time.time()
+        with self._lock:
+            cfg = self._cfg()
+            state = self._load(uid, now)
+            old = float(state.get("score", 0.0))
+            state["score"] = self._clamp(float(score), cfg)
+            state["peak_score"] = max(float(state.get("peak_score", 0.0)), state["score"])
+            history = state.get("history") or []
+            history.append({"ts": now, "delta": round(state["score"] - old, 2),
+                            "reason": f"{reason}（操作者:{operator}）" if operator else reason,
+                            "source": "admin"})
+            state["history"] = history[-HISTORY_LIMIT:]
+            state["last_interaction"] = now
+            self._save(uid, state)
+            name, _, _ = self.get_level(state["score"])
+            return {"score": state["score"], "level": name, "old_score": round(old, 1)}
+
+    def reset(self, uid: str) -> bool:
+        """Admin: wipe a user's affinity state entirely (restarts from zero)."""
+        with self._lock:
+            return self.state_store.delete("affinity", f"user_{uid}", STATE_KEY)
+
     def get_state(self, uid: str, now: float | None = None) -> dict[str, Any]:
         """Read-only view with lazy decay applied. Never persists (worker-safe)."""
         now = now or time.time()
