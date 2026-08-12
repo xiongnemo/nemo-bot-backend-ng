@@ -51,6 +51,20 @@ def render_card(display_name: str, st: dict) -> str:
     streak_days = (st.get("streak") or {}).get("days", 0)
     total = st.get("total_interactions", 0)
     lines.append(f"┃ 连续互动：{streak_days} 天 🔥 ｜ 累计 {total} 次")
+    trend = st.get("trend_scores") or []
+    if len(trend) >= 2:
+        from store.affinity_store import render_sparkline
+        lines.append(f"┃ 近{len(trend)}日走势 {render_sparkline(trend)}")
+    titles = st.get("titles") or []
+    if titles:
+        lines.append(f"┃ 称号：{'、'.join(titles[:3])}")
+    weekly = st.get("weekly") or {}
+    ch = weekly.get("challenge")
+    if ch:
+        if weekly.get("done"):
+            lines.append(f"┃ 周挑战：{ch['name']} ✅")
+        else:
+            lines.append(f"┃ 周挑战：{ch['name']}（{weekly.get(ch['metric'], 0)}/{ch['target']}，奖励+{ch['reward']:.0f}）")
 
     lines.append("┣━━━━━━━━━━━━━━━━━━")
     daily = st.get("daily", {})
@@ -58,7 +72,8 @@ def render_card(display_name: str, st: dict) -> str:
     if today_total:
         lines.append(f"┃ 今日 {today_total:+.1f}")
         for e in daily.get("events", []):
-            lines.append(f"┃ ✓ {e.get('note', '')} +{e.get('pts', 0)}")
+            pts = e.get("pts", 0)
+            lines.append(f"┃ ✓ {e.get('note', '')}" + (f" +{pts}" if pts else ""))
         chat_gain = float(daily.get("chat_gain", 0.0))
         if chat_gain:
             lines.append(f"┃ ✓ 聊天互动 +{chat_gain:.1f}")
@@ -96,4 +111,6 @@ def bot_execute(message: Message, config: dict) -> None:
 
     store = AffinityStore(state_store, profile_store=ProfileStore(state_store))
     st = store.get_state(uid)
+    timeline = store.get_timeline(uid, days=7)
+    st["trend_scores"] = [t["end_score"] for t in timeline] + [round(st["score"], 1)]
     message.reply(render_card(message.context.user_name or str(uid), st))

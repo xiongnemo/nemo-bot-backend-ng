@@ -34,6 +34,8 @@ class StoreTestBase(unittest.TestCase):
 class TestAffinityStoreV2(StoreTestBase):
     def setUp(self):
         super().setUp()
+        # disable random crit so exact-gain assertions are deterministic
+        self.state_store.set_plugin_config("affinity", {"crit_chance": 0.0})
         self.store = AffinityStore(self.state_store)
 
     def test_fresh_start_from_zero(self):
@@ -141,7 +143,7 @@ class TestAffinityStoreV2(StoreTestBase):
         self.assertEqual(g2, 3.0)  # non-birthday user unaffected
 
     def test_daily_event_cap(self):
-        self.state_store.set_plugin_config("affinity", {"daily_event_cap": 3.0})
+        self.state_store.set_plugin_config("affinity", {"daily_event_cap": 3.0, "crit_chance": 0.0})
         self.store.record_message("u1", engaged=True, now=T0)
         st = self.store.get_state("u1", now=T0 + 1)
         self.assertLessEqual(st["daily"]["event_gain"], 3.0)
@@ -202,6 +204,169 @@ class TestAffinityStoreV2(StoreTestBase):
         finally:
             context.affinity_store = saved
 
+    def test_timeline_archive_write_path_only(self):
+        # day 1 activity, then day 2 write -> day 1 archived
+        self.store.record_message("u1", engaged=True, now=T0)
+        self.store.record_message("u1", engaged=True, now=T0 + DAY)
+        tl = self.store.get_timeline("u1", days=7)
+        self.assertEqual(len(tl), 1)
+        self.assertEqual(tl[0]["chat"], 1.0)
+        self.assertEqual(tl[0]["event"], 2.0)  # 每日初见
+        self.assertGreater(tl[0]["end_score"], 0)
+        # read path on day 3 must NOT archive day 2
+        self.store.get_state("u1", now=T0 + 2 * DAY)
+        self.assertEqual(len(self.store.get_timeline("u1", days=7)), 1)
+
+    def test_crit_once_per_day(self):
+        self.state_store.set_plugin_config("affinity", {"crit_chance": 1.0})
+        g = self.store.record_message("u1", engaged=True, now=T0)
+        # 初见2 + chat1 + 暴击extra1 = 4
+        self.assertEqual(g, 4.0)
+        st = self.store.get_state("u1", now=T0 + 1)
+        self.assertTrue(any("暴击" in e["note"] for e in st["daily"]["events"]))
+        g2 = self.store.record_message("u1", engaged=True, now=T0 + 61)
+        self.assertEqual(g2, 1.0)  # crit only once per day
+
+    def test_level_up_celebration(self):
+        self.store.adjust("u1", 15, "t1", source="system", now=T0)  # 15 陌生
+        r = self.store.adjust("u1", 10, "t2", source="system", now=T0 + 1)  # 25 熟悉
+        st = self.store.get_state("u1", now=T0 + 2)
+        notes = [e["note"] for e in st["daily"]["events"]]
+        self.assertTrue(any("关系升级" in n and "熟悉" in n for n in notes))
+        self.assertTrue(any(h["source"] == "event" and "升级" in h["reason"] for h in st["history"]))
+
+    def test_big_events_enter_history(self):
+        state = self.store._load("u1", T0)
+        state["total_interactions"] = 99
+        self.store._save("u1", state)
+        self.store.record_message("u1", engaged=True, now=T0)
+        st = self.store.get_state("u1", now=T0 + 1)
+        self.assertTrue(any(h["source"] == "event" and "里程碑" in h["reason"] for h in st["history"]))
+
+    def test_sparkline(self):
+        from store.affinity_store import render_sparkline
+        s = render_sparkline([0, 25, 50, 75, 100])
+        self.assertEqual(len(s), 5)
+        self.assertEqual(s[0], "▁")
+        self.assertEqual(s[-1], "█")
+        self.assertEqual(render_sparkline([]), "")
+
+    def test_query_affinity_history_tool(self):
+        from runtime import context
+        from agent.builtin_tools import query_affinity_history_executor
+        saved = context.affinity_store
+        context.affinity_store = self.store
+        try:
+            import time
+            now = time.time()
+            for d in range(3, 0, -1):
+                self.store.record_message("u1", engaged=True, now=now - d * DAY)
+            self.store.adjust("u1", 4, "很暖心", source="llm", now=now)
+
+            class Ctx:
+                user_id = "u1"
+                group_id = ""
+
+            class Msg:
+                context = Ctx()
+
+            out = query_affinity_history_executor({"days": 7}, Msg())
+            r = out["result"]
+            self.assertIn("trend", r)
+            self.assertGreaterEqual(len(r["daily_rollups"]), 2)
+            self.assertTrue(any("很暖心" in x for x in r["recent_records"]))
+            self.assertIn("upgrade_eta", r)
+        finally:
+            context.affinity_store = saved
+
+    def test_weekly_challenge_progress_and_reward(self):
+        # force a known challenge for determinism
+        state = self.store._load("u1", T0)
+        self.store._save("u1", state)
+        state = self.store._load("u1", T0)
+        state["weekly"] = {"week": self.store._week(T0), "interactions": 0, "days_active": 0,
+                           "gain": 0.0, "last_active_date": "",
+                           "challenge": {"id": "chat20", "name": "本周和我互动满 20 次",
+                                          "metric": "interactions", "target": 20, "reward": 8.0},
+                           "done": False}
+        self.store._save("u1", state)
+        for i in range(20):
+            self.store.record_message("u1", engaged=True, now=T0 + i * 61)
+        st = self.store.get_state("u1", now=T0 + 21 * 61)
+        self.assertTrue(st["weekly"]["done"])
+        self.assertTrue(any("周挑战达成" in e["note"] for e in st["daily"]["events"]))
+        self.assertTrue(any(h["source"] == "event" and "周挑战" in h["reason"] for h in st["history"]))
+        # reward granted exactly once
+        rewards = [e for e in st["daily"]["events"] if e["k"].startswith("challenge:")]
+        self.assertEqual(len(rewards), 1)
+        self.assertEqual(rewards[0]["pts"], 8.0)
+
+    def test_weekly_rolls_on_new_week(self):
+        self.store.record_message("u1", engaged=True, now=T0)
+        st = self.store.get_state("u1", now=T0 + 8 * DAY)
+        self.assertEqual(st["weekly"]["interactions"], 0)  # new week resets
+        self.assertIn("challenge", st["weekly"])
+
+    def test_gift_flow(self):
+        # giver below 熟悉 -> rejected
+        r = self.store.gift("g1", "r1", now=T0)
+        self.assertFalse(r["ok"])
+        self.store.adjust("g1", 30, "boost", source="system", now=T0)
+        # self-gift rejected
+        self.assertFalse(self.store.gift("g1", "g1", now=T0)["ok"])
+        r = self.store.gift("g1", "r1", now=T0 + 1)
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.store.get_state("r1", now=T0 + 2)["score"], 2.0)
+        self.assertEqual(r["giver_score"], 31.0)
+        # once per day
+        self.assertFalse(self.store.gift("g1", "r2", now=T0 + 3)["ok"])
+        # next day ok again
+        self.assertTrue(self.store.gift("g1", "r2", now=T0 + DAY)["ok"])
+
+    def test_leaderboard(self):
+        self.store.adjust("a", 50, "x", source="system", now=T0)
+        self.store.adjust("b", 80, "x", source="system", now=T0)
+        self.store.adjust("c", 10, "x", source="system", now=T0)
+        rows = self.store.leaderboard(top_n=10, now=T0 + 1)
+        self.assertEqual([r["uid"] for r in rows], ["b", "a", "c"])
+        self.assertEqual(rows[0]["score"], 80.0)
+
+    def test_titles(self):
+        state = {"streak": {"days": 8}, "total_interactions": 1200, "peak_score": 85.0,
+                 "granted": ["profile_share:a", "profile_share:b", "profile_share:c"],
+                 "daily": {"events": [{"k": "crit"}]}, "weekly": {"done": True}}
+        titles = AffinityStore.get_titles(state)
+        for expect in ["七日之约 🔥", "千言万语", "挚友认证 💎", "坦诚相待", "今日欧皇 ⚡", "本周挑战达人 🏅"]:
+            self.assertIn(expect, titles)
+
+    def test_affinity_stat_facts_blocked_everywhere(self):
+        from store.affinity_store import is_affinity_stat_text
+        self.assertTrue(is_affinity_stat_text("用户的好感度是69分"))
+        self.assertTrue(is_affinity_stat_text("affinity score: 42"))
+        self.assertFalse(is_affinity_stat_text("喜欢钓鱼和摄影"))
+        self.assertFalse(is_affinity_stat_text("对bot的好感度很高"))  # no digits -> allowed
+        # remember_fact rejects
+        from agent.builtin_tools import remember_fact_executor
+
+        class Ctx:
+            user_id = "u1"
+            group_id = ""
+
+        class Msg:
+            context = Ctx()
+
+        out = remember_fact_executor({"scope": "user", "fact": "好感度69分"}, Msg(), self.state_store)
+        self.assertIn("拒绝记录", out["result"])
+        self.assertEqual(self.state_store.get("memory", "user_u1", "facts", default=[]), [])
+
+    def test_stale_facts_hidden_at_injection(self):
+        # legacy polluted fact is filtered out of the prompt
+        self.state_store.set("memory", "user_u1", "facts", ["好感度69分", "职业是程序员"])
+        from store.affinity_store import is_affinity_stat_text
+        visible = [f for f in self.state_store.get("memory", "user_u1", "facts")
+                   if not is_affinity_stat_text(f)]
+        self.assertEqual(visible, ["职业是程序员"])
+
     def test_get_state_is_readonly(self):
         self.store.adjust("u1", 60, "t", source="system", now=T0)
         self.store.get_state("u1", now=T0 + 100 * DAY)
@@ -212,6 +377,7 @@ class TestAffinityStoreV2(StoreTestBase):
 class TestAffinityCard(StoreTestBase):
     def test_render_card(self):
         from plugins.affinity import render_card
+        self.state_store.set_plugin_config("affinity", {"crit_chance": 0.0})
         store = AffinityStore(self.state_store)
         store.record_message("u1", engaged=True, now=T0)
         store.adjust("u1", 50, "boost", source="system", now=T0)  # so the bar has filled blocks
