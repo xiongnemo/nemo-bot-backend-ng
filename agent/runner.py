@@ -172,7 +172,7 @@ class AgentRunner:
             img_str = f"\n{urls}"
             
             # Check for overall summary
-            summary = self.state_store.get("img_tags", "summary", message.request.message_id)
+            summary = self.state_store.get("img_tags", "summary", message.context.message_id)
             if summary:
                 img_str += f"\n\n<多图整体总结>: {summary}"
             
