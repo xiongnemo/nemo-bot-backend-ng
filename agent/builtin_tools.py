@@ -349,6 +349,10 @@ def adjust_affinity_executor(args: dict, msg: Message) -> dict:
         return {"error": "delta 必须是数字。"}
     reason = (args.get("reason") or "").strip() or "未说明"
     r = context.affinity_store.adjust(msg.context.user_id, delta, reason, source="llm")
+    if delta != 0 and r.get("applied_delta", 0) == 0:
+        return {
+            "result": f"好感度今日模型微调额度已达上限（每日上限10分）。实际调整 +0.0（原因：{reason}）。当前 {r['score']:.1f}/100，关系等级：{r['level']}。今日请勿再尝试调用 adjust_affinity 工具。"
+        }
     return {
         "result": f"好感度已调整 {r['applied_delta']:+.1f}（原因：{reason}）。当前 {r['score']:.1f}/100，关系等级：{r['level']}。"
     }
@@ -369,7 +373,7 @@ def think_executor(args: dict, msg: Message, sender: Sender = None, state_store:
 
 SEND_MESSAGE_DEF = ToolDefinition(
     name="send_message",
-    description="向用户发送文本消息。可以用于执行长任务时的进度汇报，或者主动开启新话题。",
+    description="向用户发送文本消息。适用于执行长任务时的进度汇报，或者主动开启新话题。注意：在一轮对话中最多只能调用 1 次！如果所有思考与操作已结束准备给出最终结果，请直接在文本中自然回复，严禁调用此工具。",
     parameters={
         "type": "object",
         "properties": {
