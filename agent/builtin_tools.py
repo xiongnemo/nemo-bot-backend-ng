@@ -17,33 +17,37 @@ logger = logging.getLogger(__name__)
 # 1. Search Chat History
 SEARCH_HISTORY_DEF = ToolDefinition(
     name="search_chat_history",
-    description="在当前群聊或私聊的历史消息中全文搜索。当需要查找某人说过什么、或者之前讨论过的特定话题时使用。",
+    description="在当前群聊或私聊的历史消息中搜索。可以按文本关键词搜索、或按特定发言人（昵称/名片/账号ID）过滤。如果未指定人名则默认在全群/当前会话中搜索。",
     parameters={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "搜索关键词（支持空格分隔多词）"},
+            "query": {"type": "string", "description": "搜索关键词（可选。例如 '出差' 或 '开会'。如果不搜具体关键词可留空或填 *）"},
+            "user": {"type": "string", "description": "发言人的昵称、群名片或账号ID（可选。支持纯 ID 如 '123456'、带平台前缀的 ID 如 'onebot:123456'、'TerminalUser' 或昵称如 '小明'。不填则搜索全群所有人的消息）"},
             "limit": {"type": "integer", "description": "返回最多结果条数", "default": 10},
         },
-        "required": ["query"],
+        "required": [],
     },
 )
 
 def search_history_executor(args: dict, msg: Message, store: MessageStore) -> dict:
     query = args.get("query", "")
+    user = args.get("user", "")
     limit = args.get("limit", 10)
     group_id = msg.context.group_id
+    dm_user_id = msg.context.user_id if not group_id else ""
     
-    # We only search within the current group for privacy
-    # (If group_id is empty, it's a DM, we search globally but could restrict to user_id)
-    results = store.search(query, group_id=group_id, limit=limit)
+    results = store.search(query=query, user=user, group_id=group_id, dm_user_id=dm_user_id, limit=limit)
     
     if not results:
-        return {"result": f"未找到包含 '{query}' 的消息。"}
+        target_desc = f"发言人匹配 '{user}' 的" if user else "全群"
+        kw_desc = f"包含 '{query}' 的" if query and query != "*" else ""
+        return {"result": f"未找到{target_desc}{kw_desc}消息。"}
     
     formatted = []
     for r in results:
         sender = r.get("user_name") or r.get("user_id") or "Unknown"
-        formatted.append(f"[{r.get('created_at')}] {sender}: {r.get('text')}")
+        sender_id_info = f"({r.get('user_id')})" if r.get('user_id') and r.get('user_name') else ""
+        formatted.append(f"[{r.get('created_at')}] {sender}{sender_id_info}: {r.get('text')}")
         
     return {"result": "\n".join(formatted)}
 

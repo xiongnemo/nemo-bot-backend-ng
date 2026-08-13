@@ -108,28 +108,72 @@ class MessageStore:
 
     def search(
         self,
-        query: str,
+        query: str = "",
+        user: str = "",
         group_id: str = "",
+        dm_user_id: str = "",
         limit: int = 20,
     ) -> list[dict]:
-        """Full-text search via FTS5."""
+        """Search messages with optional FTS5 full-text search, user filtering, and group/DM scoping."""
         conn = self.db.get_conn()
+        
+        query = (query or "").strip()
+        user = (user or "").strip()
+        
+        conditions = []
+        params = []
+        
+        # Privacy & Scoping: Group vs DM
         if group_id:
-            rows = conn.execute(
-                """SELECT m.* FROM messages m
-                   JOIN messages_fts f ON m.id = f.rowid
-                   WHERE messages_fts MATCH ? AND m.group_id = ?
-                   ORDER BY m.timestamp DESC LIMIT ?""",
-                (query, group_id, limit),
-            ).fetchall()
+            conditions.append("m.group_id = ?")
+            params.append(group_id)
+        elif dm_user_id:
+            conditions.append("m.group_id = '' AND m.user_id = ?")
+            params.append(dm_user_id)
+            
+        # User filter (exact user_id, raw user_id without prefix, OR fuzzy user_name match)
+        if user:
+            if ":" in user:
+                prefix, raw_user = user.split(":", 1)
+                # Map platform name (e.g., 'qq', 'wechat') or adapter name (e.g., 'onebot', 'telegram')
+                prefix_lower = prefix.lower()
+                platform_map = {
+                    "qq": ["onebot", "cqhttp", "cqhttp_ws", "botpy", "satori_http"],
+                    "wechat": ["ntchat"],
+                    "telegram": ["telegram"],
+                    "console": ["console"],
+                }
+                matching_frontends = platform_map.get(prefix_lower, [prefix_lower])
+                
+                conditions.append("(m.user_id = ? OR m.user_id = ? OR m.user_name LIKE ? OR m.user_name LIKE ?)")
+                params.extend([user, raw_user, f"%{user}%", f"%{raw_user}%"])
+                
+                placeholders = ",".join("?" for _ in matching_frontends)
+                conditions.append(f"m.frontend IN ({placeholders})")
+                params.extend(matching_frontends)
+            else:
+                conditions.append("(m.user_id = ? OR m.user_name LIKE ?)")
+                params.extend([user, f"%{user}%"])
+            
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        
+        # Text search (FTS5) if query is provided and not wildcard
+        if query and query != "*":
+            escaped_query = query.replace('"', '""')
+            fts_query = f'"{escaped_query}"'
+            
+            sql = f"""SELECT m.* FROM messages m
+                      JOIN messages_fts f ON m.id = f.rowid
+                      WHERE messages_fts MATCH ? AND {where_clause}
+                      ORDER BY m.timestamp DESC LIMIT ?"""
+            full_params = [fts_query] + params + [limit]
         else:
-            rows = conn.execute(
-                """SELECT m.* FROM messages m
-                   JOIN messages_fts f ON m.id = f.rowid
-                   WHERE messages_fts MATCH ?
-                   ORDER BY m.timestamp DESC LIMIT ?""",
-                (query, limit),
-            ).fetchall()
+            sql = f"""SELECT m.* FROM messages m
+                      WHERE {where_clause}
+                      ORDER BY m.timestamp DESC LIMIT ?"""
+            full_params = params + [limit]
+
+        rows = conn.execute(sql, tuple(full_params)).fetchall()
         return [dict(r) for r in rows]
 
     def get_by_time_range(

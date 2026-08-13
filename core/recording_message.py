@@ -59,6 +59,8 @@ class RecordingMessage:
                 "args": self.request.args,
                 "imgs": self.request.imgs,
                 "raw_message": self.request.raw_message,
+                "reply_to": self.request.reply_to,
+                "message_id": self.request.message_id,
             },
         }
 
