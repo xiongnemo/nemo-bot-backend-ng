@@ -29,6 +29,13 @@ SEARCH_HISTORY_DEF = ToolDefinition(
     },
 )
 
+def _format_msg_time(r: dict) -> str:
+    ts = r.get("timestamp")
+    if ts:
+        import time
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+    return str(r.get("created_at") or "")
+
 def search_history_executor(args: dict, msg: Message, store: MessageStore) -> dict:
     query = args.get("query", "")
     user = args.get("user", "")
@@ -47,7 +54,7 @@ def search_history_executor(args: dict, msg: Message, store: MessageStore) -> di
     for r in results:
         sender = r.get("user_name") or r.get("user_id") or "Unknown"
         sender_id_info = f"({r.get('user_id')})" if r.get('user_id') and r.get('user_name') else ""
-        formatted.append(f"[{r.get('created_at')}] {sender}{sender_id_info}: {r.get('text')}")
+        formatted.append(f"[{_format_msg_time(r)}] {sender}{sender_id_info}: {r.get('text')}")
         
     return {"result": "\n".join(formatted)}
 
@@ -76,7 +83,7 @@ def recent_messages_executor(args: dict, msg: Message, store: MessageStore) -> d
     for r in results:
         sender = r.get("user_name") or r.get("user_id") or "Unknown"
         msg_id_info = f" [msg_id: {r.get('message_id')}]" if r.get('message_id') else ""
-        formatted.append(f"[{r.get('created_at')}]{msg_id_info} {sender}: {r.get('text')}")
+        formatted.append(f"[{_format_msg_time(r)}]{msg_id_info} {sender}: {r.get('text')}")
         
     return {"result": "\n".join(formatted)}
 

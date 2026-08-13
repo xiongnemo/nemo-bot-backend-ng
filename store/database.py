@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS messages (
     imgs_json   TEXT    DEFAULT '[]',
     raw_json    TEXT    DEFAULT '',
     timestamp   REAL    NOT NULL,
-    created_at  TEXT    DEFAULT (datetime('now'))
+    created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_msg_group_ts  ON messages(group_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_msg_user_ts   ON messages(user_id, timestamp);

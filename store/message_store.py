@@ -42,11 +42,12 @@ class MessageStore:
         """Store a message and return its row id."""
         conn = self.db.get_conn()
         ts = timestamp or time.time()
+        created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
         cur = conn.execute(
             """INSERT INTO messages
                (frontend, group_id, user_id, user_name, text,
-                message_id, ated, imgs_json, raw_json, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                message_id, ated, imgs_json, raw_json, timestamp, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 frontend,
                 group_id,
@@ -59,6 +60,7 @@ class MessageStore:
                 json.dumps(raw_message, ensure_ascii=False, default=str)
                     if raw_message else "",
                 ts,
+                created_at,
             ),
         )
         conn.commit()
