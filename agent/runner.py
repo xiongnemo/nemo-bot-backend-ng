@@ -163,7 +163,7 @@ class AgentRunner:
             reply_author = message.request.reply_to.get("user_name", "") or message.request.reply_to.get("user_id", "Unknown")
             if reply_imgs:
                 all_imgs.extend(reply_imgs)
-            reply_ctx = f"\n\n[Replying to {reply_author}]:\n{reply_text}".rstrip()
+            reply_ctx = f"\n\n[引用回复提示：当前消息是针对群友 {reply_author} 此前发言的引用/回复]:\n>>> {reply_author} 的原话：{reply_text}".rstrip()
 
         img_str = ""
         if all_imgs:

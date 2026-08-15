@@ -108,19 +108,34 @@ Agent Execution Rules:
     linked_accounts = [k for k, v in all_links.items() if v == msg.context.user_id]
     linked_accounts_str = ", ".join(linked_accounts) if linked_accounts else "无"
 
+    if msg.context.group_id:
+        scene_desc = f"群组聊天 (Group ID: {msg.context.group_id})"
+        group_identity_guideline = f"""
+- 【群聊多人身份识别与防认错人规则】：
+  * 当前处于【多人公共群聊】环境，群里有多个群友在同时交流。
+  * 历史记录中所有 `role: "user"` 消息来自【不同的群友】，每条消息开头均标有 `[群友昵称 (ID: xxx)]`。
+  * 【本次触发你回复的目标用户】：**{msg.context.user_name} (ID: {msg.context.user_id})**。
+  * **【严禁张冠李戴】**：
+    1. 必须根据每条消息开头的 `[昵称 (ID: xxx)]` 严格辨认具体是谁在说话，严禁把 A 群友说过的话当成 B 群友说的！
+    2. 下方注入的【关于该用户的长期记忆】、【画像档案】和【好感度】**仅且仅属于当前发言者 {msg.context.user_name}**，严禁误套到其他群友或被提及的人身上！
+    3. 如果当前消息中包含引用回复，请明确分清：发消息的人是 {msg.context.user_name}，被引用的人是对方，不要主谓颠倒！"""
+    else:
+        scene_desc = "私聊 (Direct Message)"
+        group_identity_guideline = ""
+
     context = f"""
 【实时环境信息】
 - 当前系统时间：{current_time_str}
 - 正在和你对话的用户：{msg.context.user_name} (ID: {msg.context.user_id})
 - 用户权限等级：{admin_str}
 - 用户背景设定：{user_static_info}
-- 交互场景：{'群组聊天 (Group ID: ' + msg.context.group_id + ')' if msg.context.group_id else '私聊 (Direct Message)'}
+- 交互场景：{scene_desc}
 - 接入协议 (Adapter)：{msg.frontend}
 - 归一化平台 (Platform)：{get_platform(msg.frontend)}
 - 该用户名下已绑定的所有账号：{linked_accounts_str}
 - 宿主机系统 (OS)：{sys_name} {sys_release}
 - 宿主机默认编码：{sys_encoding}
-- Shell 指导原则：{shell_hint}
+- Shell 指导原则：{shell_hint}{group_identity_guideline}
 """
 
     # 3. Dynamic Memory Injection

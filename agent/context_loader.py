@@ -125,9 +125,9 @@ def load_weighted_history(conv_store, scope_key: str, current_uid: str,
 
     messages: list[ChatMessage] = []
     if collapsed_items:
-        recap = "[前情提要·其他群友与你的早前对话（已折叠）]\n" + "\n".join(f"- {it}" for it in collapsed_items)
+        recap = "[前情提要·其他群友早前的零散发言（已折叠归档，非当前发言用户）]\n" + "\n".join(f"- {it}" for it in collapsed_items)
         messages.append(ChatMessage(role="user", content=recap))
-        messages.append(ChatMessage(role="assistant", content="（已了解上述前情。）"))
+        messages.append(ChatMessage(role="assistant", content="（已了解群内早前前情，清楚上述发言非当前对话者。）"))
 
     for i, turn in enumerate(turns):
         if i in keep:
