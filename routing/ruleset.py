@@ -26,9 +26,16 @@ class Ruleset:
 
     def add_prefix(self, prefix: str, plugin: str, strip: bool = True):
         def _match(msg: IngestMessage) -> RuleMatch | None:
-            if msg.full_text.startswith(prefix):
-                args = msg.full_text[len(prefix):].strip() if strip else msg.full_text[len(prefix):]
+            text = msg.full_text.strip()
+            if text.startswith(prefix):
+                args = text[len(prefix):].strip() if strip else text[len(prefix):]
                 return RuleMatch(plugin, args)
+            # Support leading slash or fullwidth slash (e.g. /cmd or ／cmd)
+            if text.startswith(("/", "／")):
+                clean_text = text[1:]
+                if clean_text.startswith(prefix):
+                    args = clean_text[len(prefix):].strip() if strip else clean_text[len(prefix):]
+                    return RuleMatch(plugin, args)
             return None
         self.rules.append(_match)
 

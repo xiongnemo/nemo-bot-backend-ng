@@ -89,33 +89,40 @@ def bot_execute(message: Message, config: dict):
             action = "switch"
             persona_id = parts[0]
 
+    reply_text = ""
     # Handle actions
     if action == "reload":
         count = persona_store.reload()
-        return [Action(kind="reply", text=f"[Nemo] 已成功热重载人格库，当前已加载 {count} 个角色文件。")]
+        reply_text = f"[Nemo] 已成功热重载人格库，当前已加载 {count} 个角色文件。"
 
-    if action == "reset":
+    elif action == "reset":
         ok, msg_text = persona_store.reset_active_persona(scope_key)
-        return [Action(kind="reply", text=f"[Nemo] {msg_text}")]
+        reply_text = f"[Nemo] {msg_text}"
 
-    if action == "switch":
+    elif action == "switch":
         if not persona_id:
-            return [Action(kind="reply", text="400: nemo: 缺少目标角色 ID。用法: /persona switch <角色ID>")]
-        ok, msg_text = persona_store.set_active_persona(scope_key, persona_id)
-        if not ok:
-            return [Action(kind="reply", text=f"404: nemo: {msg_text}")]
-        return [Action(kind="reply", text=f"[Nemo] {msg_text}")]
+            reply_text = "400: nemo: 缺少目标角色 ID。用法: /persona switch <角色ID>"
+        else:
+            ok, msg_text = persona_store.set_active_persona(scope_key, persona_id)
+            if not ok:
+                reply_text = f"404: nemo: {msg_text}"
+            else:
+                reply_text = f"[Nemo] {msg_text}"
 
-    # Default action: list
-    active = persona_store.get_active_persona(scope_key)
-    all_personas = persona_store.list_personas()
+    else:
+        # Default action: list
+        active = persona_store.get_active_persona(scope_key)
+        all_personas = persona_store.list_personas()
 
-    lines = ["【系统可用角色列表】"]
-    for p in all_personas:
-        cur_mark = " (★当前激活)" if p.id == active.id else ""
-        def_mark = " [默认]" if p.is_default else ""
-        lines.append(f"- {p.id}: {p.display_name}{def_mark}{cur_mark}\n  简介: {p.description}")
+        lines = ["【系统可用角色列表】"]
+        for p in all_personas:
+            cur_mark = " (★当前激活)" if p.id == active.id else ""
+            def_mark = " [默认]" if p.is_default else ""
+            lines.append(f"- {p.id}: {p.display_name}{def_mark}{cur_mark}\n  简介: {p.description}")
 
-    lines.append(f"\n当前会话激活人格：「{active.display_name}」")
-    lines.append("提示：可使用 /persona switch <ID> 快速切换。")
-    return [Action(kind="reply", text="\n".join(lines))]
+        lines.append(f"\n当前会话激活人格：「{active.display_name}」")
+        lines.append("提示：可使用 /persona switch <ID> 快速切换。")
+        reply_text = "\n".join(lines)
+
+    message.reply(reply_text)
+    return reply_text

@@ -57,14 +57,18 @@ def bot_execute(message: Message, config: dict):
         level_str = args_str.split()[0]
         
     if not level_str:
-        return [Action(kind="reply", text="400: nemo: 缺少 <level> 参数。用法: /verbose <0|1|2>")]
+        msg_text = "400: nemo: 缺少 <level> 参数。用法: /verbose <0|1|2>"
+        message.reply(msg_text)
+        return msg_text
         
     try:
         level = int(level_str)
         if level not in (0, 1, 2):
             raise ValueError()
     except ValueError:
-        return [Action(kind="reply", text="400: nemo: 级别必须是 0, 1 或 2。")]
+        msg_text = "400: nemo: 级别必须是 0, 1 或 2。"
+        message.reply(msg_text)
+        return msg_text
         
     # Get scope_key
     from config import get_platform
@@ -80,4 +84,6 @@ def bot_execute(message: Message, config: dict):
     logger.info(f"User {message.context.user_id} set verbose_level to {level} for scope {scope_key}")
     
     desc = {0: "静默", 1: "常规", 2: "啰嗦"}[level]
-    return [Action(kind="reply", text=f"[Nemo] 已将你的播报等级设置为 Level {level} ({desc})。")]
+    reply_text = f"[Nemo] 已将你的播报等级设置为 Level {level} ({desc})。"
+    message.reply(reply_text)
+    return reply_text

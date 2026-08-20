@@ -296,7 +296,10 @@ def _handle_ingest(payload: dict):
         # --- Alias Interception End ---
 
         route = router.route(msg)
-        logger.info("Routed message to: %s", route.mode)
+        logger.info(
+            "Routed message %r (from %s in %s) -> mode: %s, plugin: %s, args: %r",
+            msg.text, msg.user_id, msg.group_id or "DM", route.mode, route.plugin, route.args
+        )
 
         from core.message import Message
         raw_msg = Message(payload)
@@ -403,6 +406,10 @@ def _handle_ingest(payload: dict):
 
 
 def _execute_command(msg, route):
+    logger.info(
+        "[Command Triggered] Plugin: %s | Args: %r | User: %s | Group: %s",
+        route.plugin, route.args, msg.context.user_id, msg.context.group_id or "DM"
+    )
     config = state_store.get_plugin_config(route.plugin)
     
     # We mutate the MessageRequest args for the plugin to see exactly what matched
