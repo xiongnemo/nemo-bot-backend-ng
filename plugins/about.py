@@ -11,7 +11,7 @@ from utilities import generic_exception_handler
 _name = "关于本 Bot"
 _command = ["about"]
 _man = "用法: about\n介绍本 Bot 的系统信息。"
-_tool_description = "获取 Bot 的环境、版本、和基本介绍信息。"
+_tool_description = "查询当前 Bot 程序的底层软件版本、Python运行环境和操作系统宿主机节点信息（非角色人设介绍）。仅在用户明确询问底层系统/版本/技术环境时调用。"
 _enabled = 1
 
 @generic_exception_handler

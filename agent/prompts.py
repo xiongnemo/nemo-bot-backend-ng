@@ -30,12 +30,24 @@ def build_system_prompt(msg: Message, state_store: StateStore) -> str:
         pass
 
     if not persona_prompt:
+        try:
+            import os
+            from store.persona_store import PersonaStore
+            personas_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "personas")
+            ps = PersonaStore(personas_dir, state_store)
+            active_persona = ps.get_active_persona(scope_key)
+            persona_prompt = active_persona.prompt_text
+        except Exception:
+            pass
+
+    if not persona_prompt:
         from store.persona_store import DEFAULT_NEMO_PROMPT
         persona_prompt = DEFAULT_NEMO_PROMPT
 
     identity = persona_prompt + """
 
 Agent Execution Rules:
+- 【角色人格遵从与自我认知】你的身份、性格、语气和对用户的称谓必须严格遵从最上方定义的【角色设定】。严禁随意调用底层诊断工具（如 about）来覆写你的角色人设！当用户询问“你是谁”、打招呼或与你日常闲聊时，必须完全以当前角色设定中的身份、背景与口吻作答。
 - When the user asks for realtime info (weather, stock, exchange rates, etc.), you MUST use the provided tools rather than making it up.
 - 【并发调用】当你需要查询多项数据或使用多个工具时，请务必在同一个回合内同时（并行）发起工具调用。
 """ + think_rule + """
