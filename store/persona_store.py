@@ -199,6 +199,25 @@ class PersonaStore:
     def reset_active_persona(self, scope_key: str) -> tuple[bool, str]:
         """Reset scope persona to global default."""
         self.state_store.delete("persona", scope_key, "active_id")
-        default_persona = self.get_default_persona()
-        logger.info("Reset scope %s persona to default (%s)", scope_key, default_persona.display_name)
-        return True, f"已恢复当前会话为人格默认配置「{default_persona.display_name}」。"
+        active_persona = self.get_active_persona(scope_key)
+        logger.info("Reset scope %s persona to default (%s)", scope_key, active_persona.display_name)
+        return True, f"已恢复当前会话为人格默认配置「{active_persona.display_name}」。"
+
+    def set_global_default_persona(self, persona_id: str) -> tuple[bool, str]:
+        """Set the global default persona for all scopes (unless overridden)."""
+        pid = str(persona_id or "").strip().lower()
+        if pid not in self._personas:
+            available = ", ".join(self._personas.keys())
+            return False, f"未找到角色 '{persona_id}'。可用角色列表：{available}"
+
+        target = self._personas[pid]
+        self.state_store.set("persona", "global", "default_id", pid)
+        logger.info("Switched global default persona to %s (%s)", pid, target.display_name)
+        return True, f"已将全局默认人格切换为「{target.display_name}」！（未单独指定人格的群和私聊将全部生效）"
+
+    def reset_global_default_persona(self) -> tuple[bool, str]:
+        """Reset global default persona back to factory default."""
+        self.state_store.delete("persona", "global", "default_id")
+        def_p = self.get_default_persona()
+        return True, f"已恢复全局默认人格为系统初始配置「{def_p.display_name}」。"
+

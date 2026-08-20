@@ -77,6 +77,9 @@ def bot_execute(message: Message, config: dict):
         subcmd = parts[0].lower()
         if subcmd in ("list", "ls", "列表", "查看"):
             action = "list"
+        elif subcmd in ("global", "set-global", "default-all", "全局") and len(parts) > 1:
+            action = "global"
+            persona_id = parts[1]
         elif subcmd in ("switch", "set", "use", "切换", "选择") and len(parts) > 1:
             action = "switch"
             persona_id = parts[1]
@@ -99,6 +102,17 @@ def bot_execute(message: Message, config: dict):
         ok, msg_text = persona_store.reset_active_persona(scope_key)
         reply_text = f"[Nemo] {msg_text}"
 
+    elif action == "global":
+        from config import is_superuser
+        if not is_superuser(message.frontend, message.context.user_id):
+            reply_text = "401: nemo: 只有超级管理员才能设置全局默认人格。"
+        else:
+            ok, msg_text = persona_store.set_global_default_persona(persona_id)
+            if not ok:
+                reply_text = f"404: nemo: {msg_text}"
+            else:
+                reply_text = f"[Nemo] {msg_text}"
+
     elif action == "switch":
         if not persona_id:
             reply_text = "400: nemo: 缺少目标角色 ID。用法: /persona switch <角色ID>"
@@ -116,12 +130,13 @@ def bot_execute(message: Message, config: dict):
 
         lines = ["【系统可用角色列表】"]
         for p in all_personas:
-            cur_mark = " (★当前激活)" if p.id == active.id else ""
+            cur_mark = " (★当前会话激活)" if p.id == active.id else ""
             def_mark = " [默认]" if p.is_default else ""
             lines.append(f"- {p.id}: {p.display_name}{def_mark}{cur_mark}\n  简介: {p.description}")
 
-        lines.append(f"\n当前会话激活人格：「{active.display_name}」")
-        lines.append("提示：可使用 /persona switch <ID> 快速切换。")
+        scope_desc = f"群 {gid}" if gid else f"私聊 {uid}"
+        lines.append(f"\n当前会话 ({scope_desc}) 激活人格：「{active.display_name}」")
+        lines.append("提示：发送 /persona switch <ID> 可切换当前群人格，/persona global <ID> 可切换全局默认。")
         reply_text = "\n".join(lines)
 
     message.reply(reply_text)
