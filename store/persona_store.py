@@ -81,12 +81,23 @@ class PersonaStore:
         """Scan and reload all persona markdown files from personas_dir."""
         os.makedirs(self.personas_dir, exist_ok=True)
         personas: dict[str, Persona] = {}
+        lore_files: dict[str, str] = {}
 
         # 1. Scan directory
         for filename in sorted(os.listdir(self.personas_dir)):
             if not filename.endswith(".md"):
                 continue
             path = os.path.join(self.personas_dir, filename)
+            # Separate lore companion files (e.g. serina_xmas_lore.md or serina.lore.md)
+            if filename.endswith(("_lore.md", ".lore.md")):
+                target_id = filename.replace("_lore.md", "").replace(".lore.md", "").strip().lower()
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        lore_files[target_id] = f.read().strip()
+                except Exception:
+                    logger.exception("Failed to read lore file %s", path)
+                continue
+
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     content = f.read()
@@ -96,7 +107,12 @@ class PersonaStore:
             except Exception:
                 logger.exception("Failed to load persona from %s", path)
 
-        # 2. Ensure default nemo persona exists if no personas found
+        # 2. Attach companion lore to personas
+        for pid, lore_content in lore_files.items():
+            if pid in personas:
+                personas[pid].prompt_text += f"\n\n==================================================\n【原著剧情对话与口癖语料库（情境概括与原话台词）】\n==================================================\n{lore_content}"
+
+        # 3. Ensure default nemo persona exists if no personas found
         if "nemo" not in personas:
             personas["nemo"] = Persona(
                 id="nemo",
