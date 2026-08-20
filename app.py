@@ -104,6 +104,10 @@ def setup():
     context.group_digest_store = GroupDigestStore(state_store, db)
     context.msg_store = msg_store
 
+    from store.persona_store import PersonaStore
+    personas_dir = os.path.join(os.path.dirname(__file__), "personas")
+    context.persona_store = PersonaStore(personas_dir, state_store)
+
     # 3. LLM
     init_registry(app_config.backend_config.get("llm", {}))
 

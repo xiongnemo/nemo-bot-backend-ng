@@ -13,3 +13,4 @@ topic_store: Any = None
 user_thread_store: Any = None
 group_digest_store: Any = None
 msg_store: Any = None
+persona_store: Any = None
