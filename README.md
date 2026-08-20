@@ -151,6 +151,38 @@ def bot_execute(message: Message, config: dict):
 
 ---
 
+## 🎭 Persona System (角色人格配置与热切换)
+
+Nemo-bot 采用模块化解耦的角色人格体系，将**角色语气与人设（Persona）**和**底层系统执行铁律（System Rules）**彻底分离。
+
+### 1. 角色文件规范 (`personas/*.md`)
+所有角色均存放在 `personas/` 目录下，采用 **Markdown + YAML Frontmatter** 格式：
+
+```markdown
+---
+id: "maid"
+name: "露娜"
+display_name: "露娜 🎀"
+description: "温柔体贴、优雅细致的专属女仆助手"
+creator: "nemo"
+avatar: "🎀"
+default: false
+---
+
+你是「露娜 (Luna)」，由 nemo 创造的专属贴心女仆与全能执事。
+你优雅体贴、知书达理、全心全意陪伴大家并协助处理日常事务……
+```
+
+### 2. 交互指令与一键切换
+| 指令 | 说明 |
+| :--- | :--- |
+| `/persona list` | 查看系统所有已加载角色及当前会话激活状态 |
+| `/persona switch <角色ID>` | 将当前会话（群聊或私聊）一键切换为指定角色（如 `/persona switch maid`） |
+| `/persona reset` | 恢复当前会话为全局默认角色 (`nemo`) |
+| `/persona reload` | **热重载**角色库（修改或新增 Markdown 文件后直接生效，无需重启服务） |
+
+---
+
 ## 📄 License
 
 This project is licensed under the MIT License. Developed with ❤️ by Nemo & Antigravity.
