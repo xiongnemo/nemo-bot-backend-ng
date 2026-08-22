@@ -84,3 +84,14 @@ def get_context_config() -> dict:
     """分层上下文系统配置（context 节：group_digest / user_thread / budget / retrieval）"""
     val = backend_config.get("context", {})
     return val if isinstance(val, dict) else {}
+
+
+def get_exploration_topics() -> list[str]:
+    """获取夜间自动探索的默认关注话题列表"""
+    val = backend_config.get("exploration", {}).get("topics", [])
+    if isinstance(val, str):
+        return [t.strip() for t in val.split(",") if t.strip()]
+    if isinstance(val, list):
+        return [str(t).strip() for t in val if str(t).strip()]
+    return ["打工人 摸鱼", "群聊热梗", "游戏圈 抽象", "炒股 炒币 破防"]
+
