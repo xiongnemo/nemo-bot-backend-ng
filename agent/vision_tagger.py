@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 def _fetch_image_as_base64(url: str) -> str:
     """Download or read an image and return its base64 encoded string."""
+    if url.startswith("base64://"):
+        return url[9:]
+    if url.startswith("data:") and ";base64," in url:
+        return url.split(";base64,")[1]
+
     if url.startswith("http://") or url.startswith("https://"):
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         r = requests.get(url, headers=headers, timeout=15)
