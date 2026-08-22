@@ -67,6 +67,8 @@ class Message:
                 "self_id": self.context.self_id,
                 "ated": self.context.ated,
                 "frontend_system_info": self.context.frontend_system_info,
+                "avatar_info": self.context.avatar_info,
+                "avatar_photo": self.context.avatar_photo,
             },
             "request": {
                 "command": self.request.command,

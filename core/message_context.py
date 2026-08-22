@@ -13,6 +13,8 @@ class MessageContext:
         self.ated: bool = bool(context.get("ated", False))
         self.user_name: str = str(context.get("user_name", ""))
         self.frontend_system_info: str = str(context.get("frontend_system_info", ""))
+        self.avatar_info: str = str(context.get("avatar_info", ""))
+        self.avatar_photo: str = str(context.get("avatar_photo", ""))
 
     def __str__(self) -> str:
         gid = self.group_id if self.group_id else "NONE"

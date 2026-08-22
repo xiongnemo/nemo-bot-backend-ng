@@ -21,12 +21,30 @@ def bot_execute(message: Message, config: dict):
     if not frontend_info:
         frontend_info = f"nemo-bot-frontend-qq ({frontend}) by nemo, 0.2.0"
         
+    # Read avatar info provided dynamically by the specific frontend
+    avatar_info = getattr(message.context, "avatar_info", "").strip()
+    avatar_photo = getattr(message.context, "avatar_photo", "").strip()
+
+    if not avatar_info:
+        if frontend == "telegram":
+            avatar_info = "头像是《明日方舟》的干员遥（紫野遥 🫧），温柔又勇敢的治愈系偶像少女"
+            avatar_photo = avatar_photo or "assets/haruka_avatar.jpg"
+        else:
+            avatar_info = "头像是卡比，似乎和另外一个 bot 是镜像，但可惜它已经寄了"
+            avatar_photo = avatar_photo or "assets/marshmallow.png"
+    else:
+        if not avatar_photo:
+            if frontend == "telegram":
+                avatar_photo = "assets/haruka_avatar.jpg"
+            else:
+                avatar_photo = "assets/marshmallow.png"
+
     footnote = """
 ==
 nemo-bot 以使用 Python 而不是 Java, TS, NodeJS, Ruby, Perl, PhP, C+-#%^* 或者 Rust 编写而自豪。
 This Nemo has nemo power."""
     text = (
-        f"头像是《明日方舟》的干员遥（紫野遥 🫧），温柔又勇敢的治愈系偶像少女\n"
+        f"{avatar_info}\n"
         f"==\n"
         f"{frontend_info}\n"
         f"==\n"
@@ -37,4 +55,4 @@ This Nemo has nemo power."""
         f"=="
         f"{footnote}"
     )
-    message.reply(text, photo_url="assets/haruka_avatar.jpg")
+    message.reply(text, photo_url=avatar_photo)
