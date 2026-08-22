@@ -23,7 +23,7 @@ def bot_execute(message: Message, config: dict):
         
     footnote = """
 ==
-nemo-bot 以使用 Python 而不是 Java, NodeJS, Ruby, Perl, PhP, C+-#%^* 或者 Rust 编写而自豪。
+nemo-bot 以使用 Python 而不是 Java, TS, NodeJS, Ruby, Perl, PhP, C+-#%^* 或者 Rust 编写而自豪。
 This Nemo has nemo power."""
     text = (
         f"头像是卡比，似乎和另外一个 bot 是镜像，但可惜它已经寄了\n"
