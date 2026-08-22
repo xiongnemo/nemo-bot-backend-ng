@@ -177,12 +177,20 @@ def gzctf_job(
 def register_all_jobs(engine):
     """Register jobs defined in config or defaults."""
     from agent.reflection_job import run_reflection_job
+    from agent.exploration_job import run_exploration_job
     
-    # Run daily at 03:00 AM
+    # Run daily at 03:00 AM: Reflection & Memory distillation
     engine.add_cron_job(
         job_id="system:reflection_job",
         func=run_reflection_job,
         cron_expr="0 3 * * *"
+    )
+
+    # Run daily at 03:30 AM: Autonomous Meme Exploration & Lore evolution
+    engine.add_cron_job(
+        job_id="system:exploration_job",
+        func=run_exploration_job,
+        cron_expr="30 3 * * *"
     )
 
 # ----------------------------------------------------------------------
