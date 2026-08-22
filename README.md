@@ -183,6 +183,38 @@ default: false
 
 ---
 
+## 🌐 Autonomous Nightly Exploration (夜间热梗自主探索与自我进化)
+
+Nemo-bot 配备了**全网热点与热梗自主探索系统**。系统不仅会在每日凌晨自动巡航打捞高赞神评，还支持群内即时多话题搜索与常驻话题管理。
+
+### 1. 核心工作机制
+- **夜间自动巡航**：每日凌晨 **03:30**（紧随 03:00 的记忆反思任务），定时调度器自动按关注话题或全站热门搜索 B 站播放量最高的爆款视频；
+- **大模型提纯**：自动拉取高赞神评（`mode=3`），提纯出【话题核心态势总结】、【流行切口黑话】与【实战神回复情境】；
+- **伴生语料库入库与热进化**：沉淀写入 [`personas/cyber_mate_lore.md`](personas/cyber_mate_lore.md)，归档至 `data/discoveries/`，并自动热重载，实现**零重启秒级进化**！
+
+### 2. 探索与话题管理指令
+| 指令 | 说明 | 示例 |
+| :--- | :--- | :--- |
+| `/explore` | 即时执行全量常驻话题的热度探索与提纯 | `/explore` |
+| `/explore <话题1> <话题2>...` | 即时搜索指定话题下**播放量/热度最高**的爆款视频并提取热梗 | `/explore 黑神话悟空 A股行情 蔚蓝档案` |
+| `/explore <BV号>` | 针对指定 B 站爆款视频精准抓取神评注入人设库 | `/explore BV1GJ411x7h7` |
+| `/explore topic list` | 查看当前所有夜间自动探索的常驻话题 | `/explore topic list` |
+| `/explore topic add <话题>` | **一键添加新常驻话题**（保存在持久化 StateStore 中） | `/explore topic add 考公 考研 上岸` |
+| `/explore topic remove <话题>` | 移除某个指定的常驻话题 | `/explore topic remove 炒股` |
+
+### 3. 静态配置文件定义 (`config.yml`)
+也可在 `config.yml` 中配置全局默认的夜间探索话题：
+```yaml
+exploration:
+  topics:
+    - "打工人 摸鱼"
+    - "炒股 炒币 破防"
+    - "游戏圈 抽象"
+    - "二次元 新番"
+```
+
+---
+
 ## 📄 License
 
 This project is licensed under the MIT License. Developed with ❤️ by Nemo & Antigravity.
