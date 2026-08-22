@@ -1,7 +1,7 @@
 """
 System Exploration Plugin
 ------------------------
-Allows manual or scheduled triggering of Bilibili meme harvesting, topic-targeted exploration, and lore ingestion.
+Allows manual or scheduled triggering of Bilibili meme harvesting, topic-targeted exploration, and dynamic topic management.
 """
 
 from core.message import Message
@@ -17,9 +17,14 @@ _name = "全网热梗自主探索"
 _command = ["explore", "收割热梗", "自动探索", "打捞热梗"]
 _man = (
     "用法:\n"
-    "/explore - 自动探索 B 站配置话题/全站热门榜单神评，提纯并沉淀到「赛博群友」语料库\n"
-    "/explore <话题1> <话题2>... - 针对指定话题搜索播放量/热度最高的视频并提取热梗与总结\n"
-    "/explore <BV号> - 针对指定 B 站视频抓取高赞神评并注入人设库"
+    "1. 执行探索:\n"
+    "  /explore - 自动探索当前所有常驻话题的热度最高爆款与神评\n"
+    "  /explore <话题1> <话题2>... - 即时探索指定话题（如 /explore 黑神话 原神 炒股）\n"
+    "  /explore <BV号> - 针对指定 B 站视频抓取高赞神评并注入人设库\n"
+    "2. 常驻话题管理:\n"
+    "  /explore topic list - 查看当前所有夜间自动探索的常驻话题\n"
+    "  /explore topic add <话题> - 添加新的夜间常驻探索话题\n"
+    "  /explore topic remove <话题> - 移除指定的常驻探索话题"
 )
 _enabled = True
 
@@ -42,11 +47,57 @@ _parameters = {
 
 @generic_exception_handler
 def bot_execute(message: Message, config: dict):
-    from agent.exploration_job import run_exploration_job
+    from agent.exploration_job import (
+        run_exploration_job,
+        get_all_exploration_topics,
+        add_dynamic_topic,
+        remove_dynamic_topic,
+    )
     import re
     import json
 
     args_str = (message.request.args or "").strip()
+
+    # --- Topic Management Subcommands ---
+    if args_str.startswith("topic") or args_str.startswith("话题"):
+        parts = args_str.split(maxsplit=2)
+        subcmd = parts[1].lower() if len(parts) > 1 else "list"
+        param = parts[2].strip() if len(parts) > 2 else ""
+
+        if subcmd in ("list", "查看", "列表"):
+            all_topics = get_all_exploration_topics()
+            topic_lines = "\n".join([f"  {i+1}. {t}" for i, t in enumerate(all_topics)])
+            reply_text = f"📋 【当前夜间常驻探索话题列表】\n{topic_lines}\n\n💡 提示: 发送 `/explore topic add <话题>` 可随时添加新话题！"
+            message.reply(reply_text)
+            return reply_text
+
+        elif subcmd in ("add", "添加", "新增"):
+            if not param:
+                reply_text = "400: nemo: 请提供要添加的话题名称，例如 `/explore topic add 考研 考公`"
+                message.reply(reply_text)
+                return reply_text
+            new_topics = [t.strip() for t in re.split(r"[\s,，]+", param) if t.strip()]
+            for nt in new_topics:
+                add_dynamic_topic(nt)
+            all_topics = get_all_exploration_topics()
+            topic_lines = "\n".join([f"  {i+1}. {t}" for i, t in enumerate(all_topics)])
+            reply_text = f"✅ 已成功添加常驻探索话题: {', '.join(new_topics)}\n\n📋 【更新后的常驻话题列表】\n{topic_lines}"
+            message.reply(reply_text)
+            return reply_text
+
+        elif subcmd in ("remove", "delete", "del", "rm", "删除", "移除"):
+            if not param:
+                reply_text = "400: nemo: 请提供要移除的话题名称，例如 `/explore topic remove 炒股`"
+                message.reply(reply_text)
+                return reply_text
+            remove_dynamic_topic(param)
+            all_topics = get_all_exploration_topics()
+            topic_lines = "\n".join([f"  {i+1}. {t}" for i, t in enumerate(all_topics)])
+            reply_text = f"🗑️ 已移除常驻探索话题: {param}\n\n📋 【当前常驻话题列表】\n{topic_lines}"
+            message.reply(reply_text)
+            return reply_text
+
+    # --- Direct Exploration Execution ---
     target_bvid = ""
     topics = []
 
@@ -78,7 +129,8 @@ def bot_execute(message: Message, config: dict):
     elif topics:
         target_desc = f"指定话题 ({', '.join(topics)}) 的热度最高视频"
     else:
-        target_desc = "默认关注话题与全站热门榜单"
+        all_t = get_all_exploration_topics()
+        target_desc = f"常驻话题 ({', '.join(all_t)}) 的热度最高视频"
 
     message.reply(f"[Nemo] 正在启动全网热点探索引擎，正在打捞 {target_desc} 并提纯高赞神评，请稍候…… 🚀")
 

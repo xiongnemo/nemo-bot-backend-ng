@@ -344,6 +344,57 @@ def save_discovery_archive(video_data: list[dict], distilled: dict, topics: list
         logger.exception("Failed to save discovery archive")
 
 
+def get_all_exploration_topics() -> list[str]:
+    """Retrieve all active topics combining config.yml and dynamic StateStore topics."""
+    base_topics = list(get_exploration_topics())
+    try:
+        from runtime import context
+        if context.state_store is not None:
+            dynamic = context.state_store.get("exploration", "config", "topics", default=[])
+            if isinstance(dynamic, list):
+                for t in dynamic:
+                    t_str = str(t).strip()
+                    if t_str and t_str not in base_topics:
+                        base_topics.append(t_str)
+    except Exception:
+        pass
+    return base_topics
+
+
+def add_dynamic_topic(topic: str) -> list[str]:
+    """Add a dynamic topic to StateStore. Returns all current topics."""
+    topic = topic.strip()
+    if not topic:
+        return get_all_exploration_topics()
+    try:
+        from runtime import context
+        if context.state_store is not None:
+            dynamic = context.state_store.get("exploration", "config", "topics", default=[])
+            if not isinstance(dynamic, list):
+                dynamic = []
+            if topic not in dynamic:
+                dynamic.append(topic)
+                context.state_store.set("exploration", "config", "topics", dynamic)
+    except Exception:
+        logger.exception("Failed to add dynamic topic")
+    return get_all_exploration_topics()
+
+
+def remove_dynamic_topic(topic: str) -> list[str]:
+    """Remove a dynamic topic from StateStore. Returns all current topics."""
+    topic = topic.strip()
+    try:
+        from runtime import context
+        if context.state_store is not None:
+            dynamic = context.state_store.get("exploration", "config", "topics", default=[])
+            if isinstance(dynamic, list) and topic in dynamic:
+                dynamic.remove(topic)
+                context.state_store.set("exploration", "config", "topics", dynamic)
+    except Exception:
+        logger.exception("Failed to remove dynamic topic")
+    return get_all_exploration_topics()
+
+
 def run_exploration_job(target_bvid: str = "", topics: list[str] | None = None) -> dict:
     """
     Main entrypoint for autonomous exploration:
@@ -353,7 +404,7 @@ def run_exploration_job(target_bvid: str = "", topics: list[str] | None = None) 
     """
     effective_topics = topics
     if not target_bvid and not effective_topics:
-        cfg_topics = get_exploration_topics()
+        cfg_topics = get_all_exploration_topics()
         if cfg_topics:
             effective_topics = cfg_topics
 
