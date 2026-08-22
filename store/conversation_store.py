@@ -33,18 +33,18 @@ class ConversationStore:
     ) -> list[dict]:
         """
         Return the last *max_turns* messages for *scope_key*,
-        oldest-first.  Each dict has: role, content, metadata_json.
+        oldest-first.  Each dict has: role, content, metadata, created_at.
         """
         conn = self.db.get_conn()
         rows = conn.execute(
-            """SELECT role, content, metadata_json FROM conversations
+            """SELECT role, content, metadata_json, created_at FROM conversations
                WHERE scope_key = ?
                ORDER BY created_at DESC LIMIT ?""",
             (scope_key, max_turns),
         ).fetchall()
         result = []
         for r in reversed(rows):
-            entry: dict[str, Any] = {"role": r[0], "content": r[1]}
+            entry: dict[str, Any] = {"role": r[0], "content": r[1], "created_at": r[3]}
             if r[2]:
                 try:
                     entry["metadata"] = json.loads(r[2])

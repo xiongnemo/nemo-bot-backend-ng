@@ -32,16 +32,41 @@ DEFAULTS = {
 }
 
 
-def _to_chat_message(d: dict) -> ChatMessage:
+def _to_chat_message(d: dict, current_persona: Any | None = None, switched_at: float = 0.0) -> ChatMessage:
     meta = d.get("metadata") or {}
     tc_data = meta.get("tool_calls")
     tcs = None
     if tc_data:
         from nemollm.types import ToolCall
         tcs = [ToolCall(**tc) for tc in tc_data]
+
+    content = d.get("content") or ""
+    role = d.get("role")
+
+    # If this is an assistant message, check if it belongs to a past/different persona
+    if role == "assistant" and current_persona and content:
+        msg_pid = str(meta.get("persona_id") or "").strip().lower()
+        msg_pname = str(meta.get("persona_name") or "").strip()
+        created_at = float(d.get("created_at") or 0.0)
+
+        is_other_persona = False
+        other_name = ""
+
+        if msg_pid:
+            if msg_pid != current_persona.id.lower():
+                is_other_persona = True
+                other_name = msg_pname or msg_pid
+        elif switched_at > 0.0 and created_at and created_at < switched_at:
+            is_other_persona = True
+            other_name = "前序助理"
+
+        if is_other_persona and other_name:
+            if not content.startswith("[") or "此前回复" not in content[:30]:
+                content = f"[{other_name} (此前回复)]: {content}"
+
     return ChatMessage(
-        role=d["role"],
-        content=d["content"],
+        role=role,
+        content=content,
         tool_calls=tcs,
         tool_call_id=meta.get("tool_call_id"),
         name=meta.get("name"),
@@ -80,14 +105,28 @@ def _split_turns(history: list[dict]) -> list[list[dict]]:
 
 
 def load_weighted_history(conv_store, scope_key: str, current_uid: str,
-                          is_group: bool, cfg: dict | None = None) -> list[ChatMessage]:
+                          is_group: bool, cfg: dict | None = None,
+                          state_store: Any | None = None) -> list[ChatMessage]:
     c = dict(DEFAULTS)
     if cfg:
         c.update({k: v for k, v in cfg.items() if k in DEFAULTS})
 
+    current_persona = None
+    switched_at = 0.0
+    try:
+        from runtime import context as rt_context
+        if getattr(rt_context, "persona_store", None) is not None:
+            current_persona = rt_context.persona_store.get_active_persona(scope_key)
+        if state_store is not None:
+            switched_at = float(state_store.get("persona", scope_key, "switched_at", default=0.0) or 0.0)
+            if not switched_at:
+                switched_at = float(state_store.get("persona", "global", "switched_at", default=0.0) or 0.0)
+    except Exception:
+        pass
+
     if not is_group:
         history = conv_store.get_history(scope_key, max_turns=30)
-        return [_to_chat_message(d) for d in history]
+        return [_to_chat_message(d, current_persona, switched_at) for d in history]
 
     history = conv_store.get_history(scope_key, max_turns=int(c["raw_turns"]))
     turns = _split_turns(history)
@@ -132,7 +171,7 @@ def load_weighted_history(conv_store, scope_key: str, current_uid: str,
     for i, turn in enumerate(turns):
         if i in keep:
             for row in turn:
-                messages.append(_to_chat_message(row))
+                messages.append(_to_chat_message(row, current_persona, switched_at))
     return messages
 
 

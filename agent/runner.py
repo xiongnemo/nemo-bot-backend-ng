@@ -152,6 +152,7 @@ class AgentRunner:
         messages = load_weighted_history(
             self.memory.store, scope_key, uid, bool(gid),
             cfg=get_context_config().get("history", {}),
+            state_store=self.state_store,
         )
         messages = _sanitize_messages(messages)
         
@@ -318,6 +319,14 @@ class AgentRunner:
             return [Action(kind="reply", text="[Nemo] 我想太久了，脑袋有点晕...")]
             
         # 4. Save to DB
+        active_persona = None
+        try:
+            from runtime import context as rt_context
+            if getattr(rt_context, "persona_store", None) is not None:
+                active_persona = rt_context.persona_store.get_active_persona(scope_key)
+        except Exception:
+            pass
+
         self.memory.store.append(scope_key, role="user", content=formatted_query, metadata={"user_id": uid})
         for m in new_messages_for_db:
             meta = {}
@@ -327,11 +336,12 @@ class AgentRunner:
                 meta["tool_call_id"] = m.tool_call_id
             if m.name:
                 meta["name"] = m.name
-            
-            content_to_save = str(m.content)
-            
+            if m.role == "assistant" and active_persona:
+                meta["persona_id"] = active_persona.id
+                meta["persona_name"] = active_persona.name
 
-            
+            content_to_save = str(m.content)
+
             self.memory.store.append(
                 scope_key,
                 role=m.role,
