@@ -26,7 +26,7 @@ def bot_execute(message: Message, config: dict):
 nemo-bot 以使用 Python 而不是 Java, TS, NodeJS, Ruby, Perl, PhP, C+-#%^* 或者 Rust 编写而自豪。
 This Nemo has nemo power."""
     text = (
-        f"头像是卡比，似乎和另外一个 bot 是镜像，但可惜它已经寄了\n"
+        f"头像是《明日方舟》的干员遥（紫野遥 🫧），温柔又勇敢的治愈系偶像少女\n"
         f"==\n"
         f"{frontend_info}\n"
         f"==\n"
@@ -37,4 +37,4 @@ This Nemo has nemo power."""
         f"=="
         f"{footnote}"
     )
-    message.reply(text, photo_url="assets/marshmallow.png")
+    message.reply(text, photo_url="assets/haruka_avatar.jpg")
