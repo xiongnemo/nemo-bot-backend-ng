@@ -107,6 +107,11 @@ class ToolRegistry:
                 logger.debug("Skipping %s: no _name attribute", module_name)
                 continue
 
+            # Skip plugins explicitly hidden from agent / not registered as tools
+            if getattr(mod, "_hide_from_agent", False) or getattr(mod, "_as_tool", True) is False:
+                logger.info("Skipping tool registration for %s (_hide_from_agent=True)", module_name)
+                continue
+
             # Determine the description for the LLM
             if hasattr(mod, "_tool_description"):
                 description = mod._tool_description
