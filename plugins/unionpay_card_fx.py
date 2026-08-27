@@ -223,18 +223,12 @@ def workload(src: str, dst: str = "CNY") -> str:
     )
 
 
-from classes.message import Message
+from core.message import Message
 from utilities import generic_exception_handler
 
-import traceback
-
-# _allowed_groups = ['485541033'] # uncomment to set allowed groups, superusers will always be allowed
-# _allowed_users = ['1234567890'] # uncomment to set allowed users, superusers will always be allowed
-# _disallowed_users = ['1234567890'] # uncomment to set disallowed users, superusers will always be allowed
-# _disallowed_groups = ['485541033'] # uncomment to set disallowed groups, superusers will always be allowed
-
-_command = ["unionpay_card_fx"]
+_command = ["unionpay_card_fx", "银联卡汇率", "银联汇率", "银联", "upfx", "ylfx"]
 _name = "银联卡汇率"
+_enabled = True
 _man = """本系统中显示的汇率来源于银联系统。银联系统中的汇率，是依据多个渠道和市场化原则取得的基础汇率，不包括发卡行额外收取的任何费用以及四舍五入等因素的影响（如有）。
 银联卡交易通常适用交易日当天的汇率，但在特殊情况下，适用交易结算日的汇率。（注：交易日系指交易实际发起的日期，结算日系指银联与发卡行、收单行进行资金清算的日期）
 银联系统汇率周一至周五每日更新，周六周日延用周五汇率。如无特殊情况，部分欧系货币汇率生效时间为北京时间16:30，其他货币汇率生效时间为北京时间11:00。特别提示，本系统查询显示的汇率更新时间可能晚于前述生效时间。
