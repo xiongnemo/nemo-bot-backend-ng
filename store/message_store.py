@@ -108,6 +108,49 @@ class MessageStore:
             ).fetchall()
         return [dict(r) for r in reversed(rows)]  # oldest-first
 
+    def recent_images(
+        self,
+        group_id: str = "",
+        user_id: str = "",
+        limit: int = 5,
+        max_age_seconds: float = 1800.0,
+    ) -> list[dict]:
+        """Fetch recent messages that contain image attachments."""
+        conn = self.db.get_conn()
+        cutoff = time.time() - max_age_seconds
+        if group_id:
+            rows = conn.execute(
+                """SELECT user_name, user_id, imgs_json, timestamp, text FROM messages
+                   WHERE group_id = ? AND imgs_json != '[]' AND timestamp >= ?
+                   ORDER BY timestamp DESC LIMIT ?""",
+                (group_id, cutoff, limit),
+            ).fetchall()
+        elif user_id:
+            rows = conn.execute(
+                """SELECT user_name, user_id, imgs_json, timestamp, text FROM messages
+                   WHERE group_id = '' AND user_id = ? AND imgs_json != '[]' AND timestamp >= ?
+                   ORDER BY timestamp DESC LIMIT ?""",
+                (user_id, cutoff, limit),
+            ).fetchall()
+        else:
+            return []
+
+        results = []
+        for r in rows:
+            try:
+                imgs = json.loads(r["imgs_json"]) if r["imgs_json"] else []
+                if imgs:
+                    results.append({
+                        "user_name": r["user_name"],
+                        "user_id": r["user_id"],
+                        "imgs": imgs,
+                        "timestamp": r["timestamp"],
+                        "text": r["text"],
+                    })
+            except Exception:
+                pass
+        return results
+
     def search(
         self,
         query: str = "",

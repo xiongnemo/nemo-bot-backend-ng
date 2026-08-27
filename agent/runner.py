@@ -174,7 +174,10 @@ class AgentRunner:
                 if tag:
                     img_parts.append(f"[附图/Image Attached]: {url}\n<图像内容分析>: {tag}")
                 else:
-                    img_parts.append(f"[附图/Image Attached]: {url}")
+                    img_parts.append(
+                        f"[附图/Image Attached]: {url}\n"
+                        f"（系统提示：该图片暂无预提取的图像内容分析。若当前问题需要了解该图片内容，请主动调用 `vision_analyze` 工具对该 URL 进行深度视觉分析！）"
+                    )
             urls = "\n\n".join(img_parts)
             img_str = f"\n{urls}"
             
@@ -182,6 +185,42 @@ class AgentRunner:
             summary = self.state_store.get("img_tags", "summary", message.context.message_id)
             if summary:
                 img_str += f"\n\n<多图整体总结>: {summary}"
+        else:
+            # If no image was directly attached or quoted in this message, check recent images from group/DM (within 30 mins)
+            try:
+                import time as _time
+                from runtime import context as rt_context
+                if getattr(rt_context, "msg_store", None) is not None:
+                    recent_img_msgs = rt_context.msg_store.recent_images(
+                        group_id=gid, user_id="" if gid else uid, limit=3, max_age_seconds=1800.0
+                    )
+                    if recent_img_msgs:
+                        recent_parts = []
+                        for item in recent_img_msgs:
+                            sender_name = item["user_name"] or item["user_id"] or "群友"
+                            time_str = _time.strftime("%H:%M:%S", _time.localtime(item["timestamp"]))
+                            for url in item["imgs"]:
+                                tag = self.state_store.get("img_tags", "global", url)
+                                if tag:
+                                    recent_parts.append(
+                                        f"- [群友 {sender_name} 发送于 {time_str}]:\n"
+                                        f"  [附图/Image Attached]: {url}\n"
+                                        f"  <图像内容分析>: {tag}"
+                                    )
+                                else:
+                                    recent_parts.append(
+                                        f"- [群友 {sender_name} 发送于 {time_str}]:\n"
+                                        f"  [附图/Image Attached]: {url}\n"
+                                        f"  （系统提示：该图片暂无预提取的图像内容分析。若用户的提问涉及该图，请主动调用 `vision_analyze` 工具传入此 URL 进行深度视觉分析！）"
+                                    )
+                        if recent_parts:
+                            img_str = (
+                                "\n\n【近期发送的图片记录 (Recent Media in Chat)】"
+                                "（系统提示：若用户的提问涉及看图、识图、对比、鉴定或读图等视觉需求，且指向近期发送的照片，请参考以下图片。如需深度分析请主动调用 `vision_analyze` 工具）：\n"
+                                + "\n\n".join(recent_parts)
+                            )
+            except Exception:
+                logger.exception("Failed to load recent media context")
             
         # Append new user message with speaker injection if in group
         if gid:
