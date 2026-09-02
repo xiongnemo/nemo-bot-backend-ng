@@ -347,6 +347,72 @@ def inline_eval():
         }), 200
 
 
+def get_telegram_commands_list() -> list[dict]:
+    """Scan all enabled plugins and generate a list of Telegram-compatible commands."""
+    import re
+    import importlib
+    from plugins import plugin_names
+
+    results = []
+    seen = set()
+
+    def clean_desc(name: str, man: str, desc: str) -> str:
+        param_hint = ""
+        if man:
+            m = re.search(r"用法[:：]\s*(?:/?[a-zA-Z0-9_]+)?\s*([<\[].*?[>\]])", man)
+            if m:
+                param_hint = " " + m.group(1).strip()
+        if name:
+            base = name.strip()
+            if param_hint and param_hint not in base:
+                base += param_hint
+            return base[:100]
+        if desc:
+            return desc.strip().split("\n")[0][:100]
+        return "实用工具"
+
+    for mod_name in plugin_names:
+        try:
+            mod = importlib.import_module(f"plugins.{mod_name}")
+            if getattr(mod, "_enabled", True) is False:
+                continue
+            # Skip hidden/private plugins (e.g. ctj) from public Telegram menu tips
+            if getattr(mod, "_hide_from_agent", False) is True:
+                continue
+            cmds = getattr(mod, "_command", [])
+            pname = getattr(mod, "_name", "")
+            man = getattr(mod, "_man", "")
+            desc = getattr(mod, "_tool_description", "")
+
+            description = clean_desc(pname, man, desc)
+
+            for c in cmds:
+                c_clean = c.strip().lower()
+                # Telegram commands: 1-32 chars, only lowercase alphanumeric and underscores
+                if re.match(r"^[a-z0-9_]{1,32}$", c_clean):
+                    if c_clean not in seen:
+                        seen.add(c_clean)
+                        results.append({"command": c_clean, "description": description})
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: x["command"])
+    return results
+
+
+@app.route('/api/tg_commands', methods=['GET'])
+def get_tg_commands():
+    """Returns Telegram-compatible bot commands list in both JSON and text format."""
+    commands = get_telegram_commands_list()
+    text_format = "\n".join(f"{c['command']} - {c['description']}" for c in commands)
+    return jsonify({
+        "status": "ok",
+        "count": len(commands),
+        "commands": commands,
+        "text": text_format
+    })
+
+
 # ======================================================================
 # Dispatch Workers
 # ======================================================================
@@ -627,6 +693,12 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--check":
         logger.info("Initialization check passed successfully!")
         print("OK")
+        sys.exit(0)
+
+    if "--export-tg-commands" in sys.argv:
+        cmds = get_telegram_commands_list()
+        for c in cmds:
+            print(f"{c['command']} - {c['description']}")
         sys.exit(0)
 
     import atexit
