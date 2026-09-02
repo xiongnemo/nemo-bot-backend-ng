@@ -95,3 +95,23 @@ def get_exploration_topics() -> list[str]:
         return [str(t).strip() for t in val if str(t).strip()]
     return ["打工人 摸鱼", "群聊热梗", "游戏圈 抽象", "炒股 炒币 破防"]
 
+
+def get_guest_config() -> dict:
+    """获取访客模式配置 (guest 节)"""
+    default_cfg = {
+        "enabled": False,
+        "policy": "safe_commands_only",  # "safe_commands_only" | "sandboxed_agent" | "disabled"
+        "allowed_plugins": [
+            "about", "help", "unionpay_card_fx", "rmbfx", "ticker", "weather", "calculator", "currency"
+        ],
+        "rate_limit_per_hour": 10,
+        "whitelisted_groups": [],
+        "whitelisted_users": [],
+    }
+    val = backend_config.get("guest", {})
+    if isinstance(val, dict):
+        merged = dict(default_cfg)
+        merged.update(val)
+        return merged
+    return default_cfg
+

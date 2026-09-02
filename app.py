@@ -257,6 +257,96 @@ def create_channel():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/api/inline', methods=['POST'])
+def inline_eval():
+    """Synchronous command evaluation endpoint for Telegram Inline Query."""
+    payload = request.get_json()
+    if not payload:
+        return jsonify({"error": "Invalid or missing JSON payload"}), 400
+
+    query = (payload.get("query") or "").strip()
+    frontend_name = payload.get("frontend", "telegram")
+    user_id = str(payload.get("context", {}).get("user_id", "guest"))
+    user_name = str(payload.get("context", {}).get("user_name", "User"))
+    group_id = str(payload.get("context", {}).get("group_id", ""))
+
+    if not query:
+        return jsonify({
+            "status": "ok",
+            "type": "suggestions",
+            "suggestions": [
+                {"title": "银联卡汇率 (upfx)", "command": "upfx USD", "description": "查询银联实时汇率 (例: upfx USD / upfx JPY)"},
+                {"title": "加密货币行情 (ticker)", "command": "ticker BTC", "description": "查询代币实时价格行情 (例: ticker BTC)"},
+                {"title": "人民币外汇牌价 (rmbfx)", "command": "rmbfx USD", "description": "查询中国银行外汇牌价 (例: rmbfx JPY)"},
+                {"title": "天气预报 (weather)", "command": "weather 上海", "description": "查询实时天气预报 (例: weather 北京)"},
+                {"title": "全量指令手册 (help)", "command": "help", "description": "查看 Nemo 机器人帮助与插件使用说明"},
+            ]
+        })
+
+    # Prepare IngestMessage payload
+    ingest_payload = {
+        "frontend": frontend_name,
+        "context": {
+            "group_id": group_id,
+            "group_name": "",
+            "user_id": user_id,
+            "user_name": user_name,
+            "message_id": f"inline_{int(time.time() * 1000)}",
+            "self_id": "",
+            "ated": True,
+            "avatar_info": "",
+            "avatar_photo": "",
+            "frontend_system_info": "inline_query"
+        },
+        "request": {
+            "command": "",
+            "args": query,
+            "imgs": [],
+            "raw_message": query,
+            "reply_to": None
+        }
+    }
+
+    try:
+        msg = IngestMessage.from_dict(ingest_payload)
+        route = router.route(msg)
+
+        if route.mode == "command" and route.plugin:
+            from core.recording_message import RecordingMessage
+            rec_msg = RecordingMessage(ingest_payload)
+            plugin_mod = ruleset.get_plugin_module(route.plugin)
+            if plugin_mod and hasattr(plugin_mod, "bot_execute"):
+                rec_msg.request.args = route.args
+                rec_msg.request.command = route.plugin
+                plugin_mod.bot_execute(rec_msg, app_config.backend_config)
+
+                texts = [a.text for a in rec_msg.outbox if a.text]
+                result_text = "\n".join(texts).strip() if texts else "（指令执行完毕，无输出）"
+                return jsonify({
+                    "status": "ok",
+                    "type": "command_result",
+                    "plugin": route.plugin,
+                    "query": query,
+                    "title": f"[{route.plugin}] {query}",
+                    "text": result_text
+                })
+
+        return jsonify({
+            "status": "ok",
+            "type": "unhandled",
+            "title": f"未匹配快捷指令: {query}",
+            "text": f"输入 '{query}' 未匹配到可直接执行的命令。可以尝试输入 'upfx USD' 或 'ticker BTC'。"
+        })
+    except Exception as e:
+        logger.exception("Failed to evaluate inline query: %s", query)
+        return jsonify({
+            "status": "error",
+            "type": "command_result",
+            "title": f"执行异常: {query}",
+            "text": f"500: nemo: 执行发生异常: {e}"
+        }), 200
+
+
 # ======================================================================
 # Dispatch Workers
 # ======================================================================
@@ -347,6 +437,50 @@ def _handle_ingest(payload: dict):
                 if not allowed:
                     logger.info("User %s is unauthorized for %s. Silently dropping.", target_user, plugin_name)
                     return
+
+        # --- Guest Mode Enforcement Start ---
+        guest_cfg = app_config.get_guest_config()
+        if guest_cfg.get("enabled", False) and not is_su and route.mode in ["command", "agent"]:
+            whitelisted_users = [str(u) for u in guest_cfg.get("whitelisted_users", [])]
+            whitelisted_groups = [str(g) for g in guest_cfg.get("whitelisted_groups", [])]
+
+            is_member = (
+                str(msg.user_id) in whitelisted_users
+                or str(primary_uid) in whitelisted_users
+                or (bool(msg.group_id) and str(msg.group_id) in whitelisted_groups)
+            )
+
+            if not is_member:
+                policy = guest_cfg.get("policy", "safe_commands_only")
+                if policy == "disabled":
+                    logger.info("Guest mode: silently dropping message from guest %s in %s", primary_uid, msg.group_id or "DM")
+                    return
+                elif policy == "safe_commands_only":
+                    if route.mode == "command":
+                        allowed_plugins = guest_cfg.get("allowed_plugins", [])
+                        if route.plugin not in allowed_plugins:
+                            logger.info("Guest %s tried to execute non-allowed command %s", primary_uid, route.plugin)
+                            from core.types import Action
+                            sender.deliver_actions(payload, [Action(kind="reply", text="403: nemo: 访客模式下仅开放基础查询指令（如 /upfx 汇率、/ticker 行情、/weather 天气等）。")])
+                            return
+                    elif route.mode == "agent":
+                        logger.info("Guest %s tried to trigger agent in safe_commands_only mode", primary_uid)
+                        from core.types import Action
+                        sender.deliver_actions(payload, [Action(kind="reply", text="[Nemo] 当前处于访客模式，全量智能体对话暂未对访客开放。输入 /help 可查看可用的公共查询指令。")])
+                        return
+                elif policy == "sandboxed_agent":
+                    now_ts = time.time()
+                    current_hour = int(now_ts // 3600)
+                    rate_key = f"{primary_uid}:{current_hour}"
+                    cur_count = state_store.get("guest_rate", "hourly", rate_key, default=0)
+                    limit = int(guest_cfg.get("rate_limit_per_hour", 10))
+                    if cur_count >= limit:
+                        logger.info("Guest %s exceeded hourly limit %s", primary_uid, limit)
+                        from core.types import Action
+                        sender.deliver_actions(payload, [Action(kind="reply", text="429: nemo: 访客每小时请求次数已达上限，请稍后再试。")])
+                        return
+                    state_store.set("guest_rate", "hourly", rate_key, cur_count + 1)
+        # --- Guest Mode Enforcement End ---
         # --- ACL Logic End ---
 
         # --- Affinity Tracking Start ---
