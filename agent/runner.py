@@ -244,9 +244,17 @@ class AgentRunner:
         
         from nemollm.registry import get_registry
         registry = get_registry()
+        models = [m for _, m in registry.get_models()]
+        primary_model = models[0] if models else ""
         
         # 2. Build dynamic system prompt
-        system_prompt = build_system_prompt(message, self.state_store)
+        system_prompt = build_system_prompt(
+            message,
+            self.state_store,
+            model_name=primary_model,
+            max_steps=self.max_steps,
+            tools=tools,
+        )
         
         verbose_level = self.state_store.get("agent", "verbose_level", scope_key, default=0)
         

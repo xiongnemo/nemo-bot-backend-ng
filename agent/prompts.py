@@ -7,7 +7,13 @@ from config import get_platform, get_superusers
 from core.message import Message
 from store.state_store import StateStore
 
-def build_system_prompt(msg: Message, state_store: StateStore) -> str:
+def build_system_prompt(
+    msg: Message,
+    state_store: StateStore,
+    model_name: str = "",
+    max_steps: int = 8,
+    tools: list | None = None,
+) -> str:
     """Dynamically builds the system prompt with context and memory."""
     from config import backend_config
     if backend_config.get("agent", {}).get("disable_think_tool", False):
@@ -21,11 +27,15 @@ def build_system_prompt(msg: Message, state_store: StateStore) -> str:
 
     # 1. Identity & Base Persona (Modular via PersonaStore)
     persona_prompt = ""
+    persona_id = "default"
+    persona_display_name = "Nemo"
     try:
         from runtime import context as rt_context
         if getattr(rt_context, "persona_store", None) is not None:
             active_persona = rt_context.persona_store.get_active_persona(scope_key)
             persona_prompt = active_persona.prompt_text
+            persona_id = getattr(active_persona, "id", "default")
+            persona_display_name = getattr(active_persona, "display_name", active_persona.name)
     except Exception:
         pass
 
@@ -37,6 +47,8 @@ def build_system_prompt(msg: Message, state_store: StateStore) -> str:
             ps = PersonaStore(personas_dir, state_store)
             active_persona = ps.get_active_persona(scope_key)
             persona_prompt = active_persona.prompt_text
+            persona_id = getattr(active_persona, "id", "default")
+            persona_display_name = getattr(active_persona, "display_name", active_persona.name)
         except Exception:
             pass
 
@@ -116,8 +128,19 @@ Agent Execution Rules:
     linked_accounts = [k for k, v in all_links.items() if v == msg.context.user_id]
     linked_accounts_str = ", ".join(linked_accounts) if linked_accounts else "无"
 
+    # Environment variables: Model, Persona, Avatar, Identity
+    model_line = f"- 当前执行底座模型 (Backbone Model)：{model_name}（你由该大语言模型提供推理驱动；若用户问及技术底座请如实告知，并自然融入当前角色口吻）\n" if model_name else ""
+    persona_line = f"- 当前激活角色人格 (Active Persona)：{persona_display_name} (ID: {persona_id})\n"
+    
+    avatar_info = getattr(msg.context, "avatar_info", "")
+    avatar_line = f"- 你的形象与头像设定：{avatar_info}\n" if avatar_info else ""
+    self_id = getattr(msg.context, "self_id", "")
+    self_line = f"- 你的账号 ID：{self_id}\n" if self_id else ""
+
+    group_name = getattr(msg.context, "group_name", "")
     if msg.context.group_id:
-        scene_desc = f"群组聊天 (Group ID: {msg.context.group_id})"
+        group_str = f"群名称: “{group_name}”, " if group_name else ""
+        scene_desc = f"群组聊天 ({group_str}Group ID: {msg.context.group_id})"
         group_identity_guideline = f"""
 - 【群聊多人身份识别与防认错人规则】：
   * 当前处于【多人公共群聊】环境，群里有多个群友在同时交流。
@@ -131,10 +154,22 @@ Agent Execution Rules:
         scene_desc = "私聊 (Direct Message)"
         group_identity_guideline = ""
 
+    # High-level capabilities & step limits
+    tool_names = [t.name for t in tools] if tools else []
+    cap_lines = [
+        "- 视觉多模态看图：已就绪（可直接读取上下文近期图片缓冲区或调用 vision_analyze 工具进行深度看图分析）",
+        "- 实时全网搜索：已就绪（支持并发调用 Google Grounding、Exa 语义搜索与网页正文抓取）",
+        "- 代码沙盒执行：已就绪（支持安全数学计算与 Python 代码运算）",
+    ]
+    if "shell" in tool_names or "cmd" in tool_names:
+        cap_lines.append("- 超级管理员底层终端 (Shell)：已开放（Windows 原生命令）")
+    cap_lines.append(f"- 单轮推理步数限制：最大允许 {max_steps} 步（请合理规划调用并在获取充足信息后及时收敛给出回答）")
+    caps_overview = "\n".join(cap_lines)
+
     context = f"""
 【实时环境信息】
 - 当前系统时间：{current_time_str}
-- 正在和你对话的用户：{msg.context.user_name} (ID: {msg.context.user_id})
+{model_line}{persona_line}{self_line}{avatar_line}- 正在和你对话的用户：{msg.context.user_name} (ID: {msg.context.user_id})
 - 用户权限等级：{admin_str}
 - 用户背景设定：{user_static_info}
 - 交互场景：{scene_desc}
@@ -144,6 +179,9 @@ Agent Execution Rules:
 - 宿主机系统 (OS)：{sys_name} {sys_release}
 - 宿主机默认编码：{sys_encoding}
 - Shell 指导原则：{shell_hint}{group_identity_guideline}
+
+【核心能力与推理状态】
+{caps_overview}
 """
 
     # 3. Dynamic Memory Injection
