@@ -506,7 +506,15 @@ def _handle_ingest(payload: dict):
 
         # --- Guest Mode Enforcement Start ---
         guest_cfg = app_config.get_guest_config()
-        if guest_cfg.get("enabled", False) and not is_su and route.mode in ["command", "agent"]:
+        target_frontends = [f.lower() for f in guest_cfg.get("frontends", ["telegram"])]
+        is_target_frontend = not target_frontends or msg.frontend.lower() in target_frontends
+
+        if (
+            guest_cfg.get("enabled", False)
+            and is_target_frontend
+            and not is_su
+            and route.mode in ["command", "agent"]
+        ):
             whitelisted_users = [str(u) for u in guest_cfg.get("whitelisted_users", [])]
             whitelisted_groups = [str(g) for g in guest_cfg.get("whitelisted_groups", [])]
 

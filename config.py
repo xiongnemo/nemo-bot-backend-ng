@@ -100,6 +100,7 @@ def get_guest_config() -> dict:
     """获取访客模式配置 (guest 节)"""
     default_cfg = {
         "enabled": False,
+        "frontends": ["telegram"],  # 默认仅在开放的 Telegram 前端生效，不干扰封闭的 QQ/微信群
         "policy": "safe_commands_only",  # "safe_commands_only" | "sandboxed_agent" | "disabled"
         "allowed_plugins": [
             "about", "help", "unionpay_card_fx", "rmbfx", "ticker", "weather", "calculator", "currency"
