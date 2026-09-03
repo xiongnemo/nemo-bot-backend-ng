@@ -14,15 +14,26 @@ def get_unionpay_card_fx(src: str, dst: str = "CNY") -> tuple[float, str, str]:
     dst = dst.upper()
     current_date = datetime.now()
     current_date_str = current_date.strftime("%Y%m%d")
-    url = TEMPLATE.format(current_date_str)
     comment = ""
-    response = requests.get(url)
-    while response.status_code != 200:
+    try:
+        response = requests.get(url, timeout=3.0)
+    except Exception:
+        response = None
+
+    attempts = 0
+    while (response is None or response.status_code != 200) and attempts < 7:
+        attempts += 1
         comment = "!非最新汇率"
         current_date = current_date - timedelta(days=1)
         current_date_str = current_date.strftime("%Y%m%d")
         url = TEMPLATE.format(current_date_str)
-        response = requests.get(url)
+        try:
+            response = requests.get(url, timeout=3.0)
+        except Exception:
+            response = None
+
+    if response is None or response.status_code != 200:
+        return (0, "?", "未能获取到汇率数据（网络超时或接口异常）")
     """
     {
         "exchangeRateJson": [
