@@ -504,57 +504,6 @@ def _handle_ingest(payload: dict):
                     logger.info("User %s is unauthorized for %s. Silently dropping.", target_user, plugin_name)
                     return
 
-        # --- Guest Mode Enforcement Start ---
-        guest_cfg = app_config.get_guest_config()
-        target_frontends = [f.lower() for f in guest_cfg.get("frontends", ["telegram"])]
-        is_target_frontend = not target_frontends or msg.frontend.lower() in target_frontends
-
-        if (
-            guest_cfg.get("enabled", False)
-            and is_target_frontend
-            and not is_su
-            and route.mode in ["command", "agent"]
-        ):
-            whitelisted_users = [str(u) for u in guest_cfg.get("whitelisted_users", [])]
-            whitelisted_groups = [str(g) for g in guest_cfg.get("whitelisted_groups", [])]
-
-            is_member = (
-                str(msg.user_id) in whitelisted_users
-                or str(primary_uid) in whitelisted_users
-                or (bool(msg.group_id) and str(msg.group_id) in whitelisted_groups)
-            )
-
-            if not is_member:
-                policy = guest_cfg.get("policy", "safe_commands_only")
-                if policy == "disabled":
-                    logger.info("Guest mode: silently dropping message from guest %s in %s", primary_uid, msg.group_id or "DM")
-                    return
-                elif policy == "safe_commands_only":
-                    if route.mode == "command":
-                        allowed_plugins = guest_cfg.get("allowed_plugins", [])
-                        if route.plugin not in allowed_plugins:
-                            logger.info("Guest %s tried to execute non-allowed command %s", primary_uid, route.plugin)
-                            from core.types import Action
-                            sender.deliver_actions(payload, [Action(kind="reply", text="403: nemo: 访客模式下仅开放基础查询指令（如 /upfx 汇率、/ticker 行情、/weather 天气等）。")])
-                            return
-                    elif route.mode == "agent":
-                        logger.info("Guest %s tried to trigger agent in safe_commands_only mode", primary_uid)
-                        from core.types import Action
-                        sender.deliver_actions(payload, [Action(kind="reply", text="[Nemo] 当前处于访客模式，全量智能体对话暂未对访客开放。输入 /help 可查看可用的公共查询指令。")])
-                        return
-                elif policy == "sandboxed_agent":
-                    now_ts = time.time()
-                    current_hour = int(now_ts // 3600)
-                    rate_key = f"{primary_uid}:{current_hour}"
-                    cur_count = state_store.get("guest_rate", "hourly", rate_key, default=0)
-                    limit = int(guest_cfg.get("rate_limit_per_hour", 10))
-                    if cur_count >= limit:
-                        logger.info("Guest %s exceeded hourly limit %s", primary_uid, limit)
-                        from core.types import Action
-                        sender.deliver_actions(payload, [Action(kind="reply", text="429: nemo: 访客每小时请求次数已达上限，请稍后再试。")])
-                        return
-                    state_store.set("guest_rate", "hourly", rate_key, cur_count + 1)
-        # --- Guest Mode Enforcement End ---
         # --- ACL Logic End ---
 
         # --- Affinity Tracking Start ---
