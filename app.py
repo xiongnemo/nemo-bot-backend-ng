@@ -258,6 +258,25 @@ def create_channel():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/reload", methods=["GET", "POST"])
+def reload_backend():
+    """Hot-reload routing rules, personas, and plugin metadata without restarting."""
+    global ruleset, router
+    from routing.ruleset import Ruleset
+    new_ruleset = Ruleset()
+    new_ruleset.load_defaults()
+    router.ruleset = new_ruleset
+    ruleset = new_ruleset
+
+    persona_cnt = context.persona_store.reload() if hasattr(context, "persona_store") else 0
+    logger.info("Hot-reloaded %d routing rules and %d personas via /api/reload", len(ruleset.rules), persona_cnt)
+    return jsonify({
+        "status": "ok",
+        "rules_count": len(ruleset.rules),
+        "personas_count": persona_cnt
+    })
+
+
 @app.route('/api/inline', methods=['POST'])
 def inline_eval():
     """Synchronous command evaluation endpoint for Telegram Inline Query."""
