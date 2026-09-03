@@ -13,24 +13,27 @@ def get_unionpay_card_fx(src: str, dst: str = "CNY") -> tuple[float, str, str]:
     src = src.upper()
     dst = dst.upper()
     current_date = datetime.now()
-    current_date_str = current_date.strftime("%Y%m%d")
     comment = ""
-    try:
-        response = requests.get(url, timeout=3.0)
-    except Exception:
-        response = None
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Referer": "https://www.unionpayintl.com/"
+    }
 
+    response = None
     attempts = 0
     while (response is None or response.status_code != 200) and attempts < 7:
-        attempts += 1
-        comment = "!非最新汇率"
-        current_date = current_date - timedelta(days=1)
         current_date_str = current_date.strftime("%Y%m%d")
         url = TEMPLATE.format(current_date_str)
         try:
-            response = requests.get(url, timeout=3.0)
+            response = requests.get(url, headers=headers, timeout=4.0)
+            if response.status_code == 200:
+                break
         except Exception:
             response = None
+        attempts += 1
+        comment = "!非最新汇率"
+        current_date = current_date - timedelta(days=1)
 
     if response is None or response.status_code != 200:
         return (0, "?", "未能获取到汇率数据（网络超时或接口异常）")
