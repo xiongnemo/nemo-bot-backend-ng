@@ -8,7 +8,7 @@ from utilities import generic_exception_handler
 
 logger = logging.getLogger(__name__)
 
-_command = ["coin", "crypto", "币", "加密货币", "合约"]
+_command = ["ticker", "coin", "crypto", "币", "加密货币", "合约"]
 _name = "统一市场行情查询"
 _man = """查询加密资产及传统金融(TradFi)实时行情。
 用法: {0} <标的> [交易所] [细分市场]
