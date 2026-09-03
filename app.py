@@ -313,24 +313,22 @@ def inline_eval():
         route = router.route(msg)
 
         if route.mode == "command" and route.plugin:
-            from core.recording_message import RecordingMessage
-            rec_msg = RecordingMessage(ingest_payload)
-            plugin_mod = ruleset.get_plugin_module(route.plugin)
-            if plugin_mod and hasattr(plugin_mod, "bot_execute"):
-                rec_msg.request.args = route.args
-                rec_msg.request.command = route.plugin
-                plugin_mod.bot_execute(rec_msg, app_config.backend_config)
+            ingest_payload["request"]["command"] = route.plugin
+            ingest_payload["request"]["args"] = route.args
 
-                texts = [a.text for a in rec_msg.outbox if a.text]
-                result_text = "\n".join(texts).strip() if texts else "（指令执行完毕，无输出）"
-                return jsonify({
-                    "status": "ok",
-                    "type": "command_result",
-                    "plugin": route.plugin,
-                    "query": query,
-                    "title": f"[{route.plugin}] {query}",
-                    "text": result_text
-                })
+            from config import backend_config
+            res_dict = executor.run_plugin_sync(ingest_payload, route.plugin, backend_config, timeout=8.0)
+            actions = res_dict.get("actions", [])
+            texts = [a.get("text", "") for a in actions if a.get("text")]
+            result_text = "\n".join(texts).strip() if texts else "（指令执行完毕，无输出）"
+            return jsonify({
+                "status": "ok",
+                "type": "command_result",
+                "plugin": route.plugin,
+                "query": query,
+                "title": f"[{route.plugin}] {query}",
+                "text": result_text
+            })
 
         return jsonify({
             "status": "ok",
