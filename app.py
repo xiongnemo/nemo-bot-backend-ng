@@ -263,12 +263,13 @@ def reload_backend():
     """Hot-reload routing rules, personas, and plugin metadata without restarting."""
     global ruleset, router
     from routing.ruleset import Ruleset
+    from runtime import context
     new_ruleset = Ruleset()
     new_ruleset.load_defaults()
     router.ruleset = new_ruleset
     ruleset = new_ruleset
 
-    persona_cnt = context.persona_store.reload() if hasattr(context, "persona_store") else 0
+    persona_cnt = context.persona_store.reload() if getattr(context, "persona_store", None) else 0
     logger.info("Hot-reloaded %d routing rules and %d personas via /api/reload", len(ruleset.rules), persona_cnt)
     return jsonify({
         "status": "ok",

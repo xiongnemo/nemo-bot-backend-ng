@@ -865,30 +865,34 @@ def update_channel_executor(args: dict, msg: Message, sender: Sender = None) -> 
 
 SEARCH_FEEDS_DEF = ToolDefinition(
     name="search_feeds",
-    description="在资讯库中按关键词和频道搜索历史新闻。注意：新闻有时会是英文，因此建议同时使用中英双语关键词。支持高级搜索语法：空格表示 AND（同时包含），竖线 | 表示 OR（或者包含）。例如 '海力士 美股 | SK Hynix' 匹配 (包含海力士且包含美股) 或者 (包含SK且包含Hynix)。",
+    description="内部 7×24 小时实时金融快讯与资讯库（核心涵盖金十数据 jinshi_finance、Odaily 星球日报 odaily_news 等秒级财经快讯与行业突发）。当用户询问资产行情异动（如‘为什么暴跌/暴涨’、‘发生什么了’、‘有什么最新消息/快讯’、‘突发利空利好’）时，必须优先使用本工具进行事件归因！支持关键词逻辑：空格表示 AND（同时包含），竖线 | 表示 OR（或者包含），建议中英双语（如 '黄金 | 金价 | 美联储 | Gold'）。如果想直接获取最近发布的最新突发快讯，可留空或传 '*'。",
     parameters={
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "搜索关键词。空格代表AND，|代表OR。"},
-            "channel_name": {"type": "string", "description": "限制搜索某个特定频道 (可选)"},
+            "query": {"type": "string", "description": "搜索关键词，支持空格(AND)与竖线|(OR)，如 '黄金 | 金价'。若想获取最新发布的全部快讯，可留空或传 '*'。"},
+            "channel_name": {"type": "string", "description": "限制搜索某个特定频道 (如 'jinshi_finance', 'odaily_news')，可选"},
             "limit": {"type": "integer", "description": "返回条数", "default": 5}
         },
-        "required": ["query"]
+        "required": []
     }
 )
 
 def search_feeds_executor(args: dict, msg: Message, sender: Sender = None) -> dict:
-    query = args.get("query", "")
-    channel_name = args.get("channel_name", "")
+    query = (args.get("query") or "").strip()
+    channel_name = (args.get("channel_name") or "").strip()
     limit = args.get("limit", 5)
     
+    generic_keywords = {"最新", "热点", "所有", "全部", "all", "latest", "news", "新闻", "快讯", "消息", "今日", "*", "最新热点", "最新消息"}
+
     try:
         from runtime import context
         conn = context.db.get_conn()
         sql = "SELECT id, channel_name, title, content, created_at FROM feeds WHERE 1=1"
         params = []
         
-        if query and query != "*":
+        is_generic_query = not query or query.lower() in generic_keywords
+
+        if not is_generic_query:
             or_groups = [g.strip() for g in query.split('|') if g.strip()]
             if not or_groups:
                 or_groups = [query]
@@ -915,6 +919,17 @@ def search_feeds_executor(args: dict, msg: Message, sender: Sender = None) -> di
         cur = conn.execute(sql, tuple(params))
         rows = cur.fetchall()
         if not rows:
+            # Fallback to latest breaking news so the agent still gets real-time market pulse
+            cur_fb = conn.execute(
+                "SELECT id, channel_name, title, content, created_at FROM feeds ORDER BY original_time DESC LIMIT ?",
+                (min(limit, 5),)
+            )
+            fb_rows = cur_fb.fetchall()
+            if fb_rows:
+                results = [f"（未检索到包含 '{query}' 的专属快讯，为你展示最近发布的最新实时资讯）:"]
+                for r in fb_rows:
+                    results.append(f"ID: {r['id']} | [{r['channel_name']}] {r['title']}\n正文: {r['content']}")
+                return {"result": "\n\n".join(results), "_is_feed_search": True, "_feed_results": results}
             return {"result": "没有找到相关资讯。"}
             
         results = []
