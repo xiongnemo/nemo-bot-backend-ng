@@ -243,13 +243,14 @@ def create_channel():
         
     channel_name = payload.get("name")
     description = payload.get("description", "")
+    enable_gatekeeper = 1 if payload.get("enable_gatekeeper", True) else 0
     if not channel_name:
         logger.warning(f"Channel creation failed: Missing channel 'name'. Payload snippet: {str(payload)[:500]}")
         return jsonify({"error": "Missing channel 'name'"}), 400
 
     try:
         conn = db.get_conn()
-        conn.execute("INSERT INTO channels (name, description) VALUES (?, ?)", (channel_name, description))
+        conn.execute("INSERT INTO channels (name, description, enable_gatekeeper) VALUES (?, ?, ?)", (channel_name, description, enable_gatekeeper))
         conn.commit()
         return jsonify({"message": f"Channel '{channel_name}' created successfully."}), 201
     except Exception as e:
@@ -270,11 +271,22 @@ def reload_backend():
     ruleset = new_ruleset
 
     persona_cnt = context.persona_store.reload() if getattr(context, "persona_store", None) else 0
-    logger.info("Hot-reloaded %d routing rules and %d personas via /api/reload", len(ruleset.rules), persona_cnt)
+    if getattr(context, "tool_registry", None):
+        import importlib
+        import agent.builtin_tools
+        importlib.reload(agent.builtin_tools)
+        agent.builtin_tools.register_builtin_tools(
+            context.tool_registry,
+            context.message_store,
+            context.state_store,
+            getattr(context, "scheduler", None)
+        )
+    logger.info("Hot-reloaded %d routing rules, %d personas, and tools via /api/reload", len(ruleset.rules), persona_cnt)
     return jsonify({
         "status": "ok",
         "rules_count": len(ruleset.rules),
-        "personas_count": persona_cnt
+        "personas_count": persona_cnt,
+        "tools_count": len(context.tool_registry.get_all_definitions()) if getattr(context, "tool_registry", None) else 0
     })
 
 

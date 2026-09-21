@@ -49,15 +49,23 @@ class FeedService:
         conn = self.db.get_conn()
         
         # 1. Check if channel exists, if not, auto-create it
-        cur = conn.execute("SELECT id FROM channels WHERE name = ?", (channel_name,))
-        if not cur.fetchone():
+        cur = conn.execute("SELECT id, enable_gatekeeper FROM channels WHERE name = ?", (channel_name,))
+        channel_row = cur.fetchone()
+        if not channel_row:
             try:
-                conn.execute("INSERT INTO channels (name, description) VALUES (?, ?)", (channel_name, "Auto-created channel"))
+                conn.execute("INSERT INTO channels (name, description, enable_gatekeeper) VALUES (?, ?, 1)", (channel_name, "Auto-created channel"))
                 conn.commit()
                 logger.info("Auto-created missing channel: %s", channel_name)
+                enable_gk = 1
             except Exception as e:
                 logger.error("Failed to auto-create channel %s: %s", channel_name, e)
                 return False, f"Channel not found and failed to create: {channel_name}", 500
+        else:
+            enable_gk = channel_row["enable_gatekeeper"] if "enable_gatekeeper" in channel_row.keys() else 1
+
+        # Explicit override from payload if provided
+        if payload.get("bypass_gatekeeper") is True or payload.get("skip_gatekeeper") is True:
+            enable_gk = 0
 
         # 2. Find subscriptions for this channel
         cur = conn.execute("SELECT target_group, keywords FROM subscriptions WHERE channel_name = ?", (channel_name,))
@@ -76,13 +84,13 @@ class FeedService:
             keywords = [k.strip().lower() for k in keywords_str.split(",") if k.strip()]
             full_text = f"{title}\n{content}".lower()
             
-            matched_keywords = [k for k in keywords if k in full_text]
+            matched_keywords = [k for k in keywords if k in ("*", "all", "全部", "所有") or k in full_text]
             if matched_keywords:
                 import logging
                 logging.getLogger(__name__).info(f"Feed '{title}' matched keywords: {matched_keywords} for group {target_group}")
                 matched_subs.append(target_group)
 
-        # 3. If we have matches, invoke Gatekeeper asynchronously (to avoid blocking the webhook)
+        # 3. If we have matches, invoke Gatekeeper or direct broadcast asynchronously
         # We will save to DB first, then let the async task update it and broadcast.
         
         # Insert into feeds
@@ -104,15 +112,28 @@ class FeedService:
         if matched_subs:
             # Deduplicate target groups to avoid sending multiple identical messages
             unique_subs = list(set(matched_subs))
-            # Dispatch to background thread
-            Thread(
-                target=self._run_gatekeeper,
-                args=(feed_id, channel_name, title, content, unique_subs),
-                daemon=True
-            ).start()
-            return True, "Feed accepted and queued for gatekeeper evaluation.", 200
+            if enable_gk == 0:
+                # Direct broadcast: bypass Gatekeeper
+                conn.execute("UPDATE feeds SET is_duplicate = 0, meta_score = 100 WHERE id = ?", (feed_id,))
+                conn.commit()
+                msg_text = f"📢 【{channel_name} 动态更新】\n{title}\n\n{content}"
+                Thread(
+                    target=self._broadcast,
+                    args=(unique_subs, msg_text),
+                    daemon=True
+                ).start()
+                logger.info("Feed '%s' (channel %s) bypassed Gatekeeper and queued for direct broadcast.", title, channel_name)
+                return True, "Feed accepted and queued for direct broadcast (Gatekeeper bypassed).", 200
+            else:
+                # Dispatch to Gatekeeper background thread
+                Thread(
+                    target=self._run_gatekeeper,
+                    args=(feed_id, channel_name, title, content, unique_subs),
+                    daemon=True
+                ).start()
+                return True, "Feed accepted and queued for gatekeeper evaluation.", 200
         else:
-            logger.info(f"Feed '{title}' matched 0 subscriptions, skipping LLM Gatekeeper.")
+            logger.info(f"Feed '{title}' matched 0 subscriptions, skipping broadcast.")
             return True, "Feed accepted and saved (no matching subscriptions).", 200
 
     def _run_gatekeeper(self, feed_id: int, channel_name: str, title: str, content: str, target_groups: list[str]):
@@ -248,23 +269,27 @@ Return your evaluation as a strict JSON object with this format:
             # Broadcast
             if not is_duplicate and should_forward:
                 msg_text = f"📰 【{channel_name} 最新资讯】\n{title}\n\n{content}\n(Gatekeeper 评语: {result.get('reason', '')})"
-                for group in target_groups:
-                    # Construct a dummy message_dict so sender knows the context
-                    # Assuming group is from onebot or ntchat. We don't know the exact frontend from target_group alone,
-                    # but target_group could be stored as "ntchat:44779935091@chatroom"
-                    if ":" in group:
-                        frontend, gid = group.split(":", 1)
-                        dummy_dict = {
-                            "frontend": frontend,
-                            "context": {"group_id": gid}
-                        }
-                    else:
-                        # Fallback for old configurations
-                        dummy_dict = {
-                            "frontend": "ntchat",
-                            "context": {"group_id": group}
-                        }
-                    self.sender.send_text(dummy_dict, msg_text)
+                self._broadcast(target_groups, msg_text)
                     
         except Exception as e:
             logger.exception("Gatekeeper execution failed")
+
+    def _broadcast(self, target_groups: list[str], msg_text: str) -> None:
+        """Broadcasts a formatted message to all matched target groups."""
+        for group in target_groups:
+            if ":" in group:
+                frontend, gid = group.split(":", 1)
+                dummy_dict = {
+                    "frontend": frontend,
+                    "context": {"group_id": gid}
+                }
+            else:
+                dummy_dict = {
+                    "frontend": "ntchat",
+                    "context": {"group_id": group}
+                }
+            try:
+                self.sender.send_text(dummy_dict, msg_text)
+            except Exception as e:
+                logger.error("Failed to broadcast feed message to %s: %s", group, e)
+

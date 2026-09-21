@@ -50,6 +50,13 @@ class Database:
     def _migrate(self):
         conn = self.get_conn()
         conn.executescript(_SCHEMA)
+        
+        # Incremental migration for existing databases
+        cur = conn.execute("PRAGMA table_info(channels)")
+        columns = [row["name"] for row in cur.fetchall()]
+        if "enable_gatekeeper" not in columns:
+            conn.execute("ALTER TABLE channels ADD COLUMN enable_gatekeeper INTEGER DEFAULT 1")
+            
         conn.commit()
         logger.info("Database migration complete: %s", self.db_path)
 
@@ -127,9 +134,10 @@ CREATE INDEX IF NOT EXISTS idx_conv_scope ON conversations(scope_key, created_at
 
 -- Information sources (Channels)
 CREATE TABLE IF NOT EXISTS channels (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL UNIQUE,
-    description TEXT DEFAULT ''
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    name              TEXT NOT NULL UNIQUE,
+    description       TEXT DEFAULT '',
+    enable_gatekeeper INTEGER DEFAULT 1  -- 1: Enable LLM Gatekeeper, 0: Bypass Gatekeeper (Direct Broadcast)
 );
 
 -- Group Subscriptions to Channels

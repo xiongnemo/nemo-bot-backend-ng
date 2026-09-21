@@ -785,7 +785,8 @@ ADD_CHANNEL_DEF = ToolDefinition(
         "type": "object",
         "properties": {
             "name": {"type": "string", "description": "频道唯一名称（如 jinshi, cctv）"},
-            "description": {"type": "string", "description": "该频道的详细描述"}
+            "description": {"type": "string", "description": "该频道的详细描述"},
+            "enable_gatekeeper": {"type": "boolean", "description": "是否开启 Gatekeeper 大模型审核，默认为 true。若为 false 则该频道新消息免审直通广播。"}
         },
         "required": ["name"]
     }
@@ -794,21 +795,28 @@ ADD_CHANNEL_DEF = ToolDefinition(
 def add_channel_executor(args: dict, msg: Message, sender: Sender = None) -> dict:
     name = args.get("name")
     description = args.get("description", "")
+    enable_gk = 1 if args.get("enable_gatekeeper", True) else 0
     if not name:
         return {"error": "Missing channel name"}
+
+    from config import is_superuser
+    if not is_superuser(msg.frontend, msg.context.user_id):
+        return {"error": "权限不足：仅管理员/超级用户可以创建新的资讯频道。"}
+
     try:
         from runtime import context
         conn = context.db.get_conn()
-        conn.execute("INSERT INTO channels (name, description) VALUES (?, ?)", (name, description))
+        conn.execute("INSERT INTO channels (name, description, enable_gatekeeper) VALUES (?, ?, ?)", (name, description, enable_gk))
         conn.commit()
-        return {"result": f"频道 {name} 创建成功。"}
+        gk_desc = "已开启 Gatekeeper 审核" if enable_gk == 1 else "已关闭 Gatekeeper (免审直通)"
+        return {"result": f"频道 {name} 创建成功 ({gk_desc})。"}
     except Exception as e:
         return {"error": str(e)}
 
 
 LIST_CHANNELS_DEF = ToolDefinition(
     name="list_channels",
-    description="列出系统中所有已注册的资讯频道及其描述。",
+    description="列出系统中所有已注册的资讯频道及其描述与 Gatekeeper 审核状态。",
     parameters={
         "type": "object",
         "properties": {},
@@ -820,48 +828,146 @@ def list_channels_executor(args: dict, msg: Message, sender: Sender = None) -> d
     try:
         from runtime import context
         conn = context.db.get_conn()
-        cur = conn.execute("SELECT name, description FROM channels")
+        cur = conn.execute("SELECT name, description, enable_gatekeeper FROM channels")
         channels = cur.fetchall()
         if not channels:
             return {"result": "当前没有注册任何频道。"}
         result = "当前系统中的资讯频道如下：\n"
         for c in channels:
             desc = c['description'] or "无描述"
-            result += f"- {c['name']}: {desc}\n"
+            gk_flag = c['enable_gatekeeper'] if 'enable_gatekeeper' in c.keys() else 1
+            gk_desc = "已开启" if gk_flag == 1 else "已关闭(免审直通)"
+            result += f"- {c['name']}: {desc} [Gatekeeper: {gk_desc}]\n"
         return {"result": result.strip()}
     except Exception as e:
         return {"error": str(e)}
 
 UPDATE_CHANNEL_DEF = ToolDefinition(
     name="update_channel",
-    description="更新一个已有频道的描述信息。",
+    description="更新一个已有频道的描述信息或 Gatekeeper 审核状态。",
     parameters={
         "type": "object",
         "properties": {
             "name": {"type": "string", "description": "要更新的频道名称"},
-            "description": {"type": "string", "description": "新的频道描述"}
+            "description": {"type": "string", "description": "新的频道描述，可选"},
+            "enable_gatekeeper": {"type": "boolean", "description": "是否开启 Gatekeeper 审核，可选"}
         },
-        "required": ["name", "description"]
+        "required": ["name"]
     }
 )
 
 def update_channel_executor(args: dict, msg: Message, sender: Sender = None) -> dict:
     name = args.get("name")
     description = args.get("description")
-    if not name or description is None:
-        return {"error": "Missing name or description"}
+    enable_gatekeeper = args.get("enable_gatekeeper")
+    if not name:
+        return {"error": "Missing name"}
+
+    from config import is_superuser
+    if not is_superuser(msg.frontend, msg.context.user_id):
+        return {"error": "权限不足：仅管理员/超级用户可以更新资讯频道。"}
+
     try:
         from runtime import context
         conn = context.db.get_conn()
-        # Check if exists
-        cur = conn.execute("SELECT id FROM channels WHERE name = ?", (name,))
-        if not cur.fetchone():
+        cur = conn.execute("SELECT id, description, enable_gatekeeper FROM channels WHERE name = ?", (name,))
+        row = cur.fetchone()
+        if not row:
             return {"error": f"频道 {name} 不存在"}
-        conn.execute("UPDATE channels SET description = ? WHERE name = ?", (description, name))
+
+        updates = []
+        params = []
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if enable_gatekeeper is not None:
+            updates.append("enable_gatekeeper = ?")
+            params.append(1 if enable_gatekeeper else 0)
+
+        if not updates:
+            return {"result": f"频道 {name} 无需更新。"}
+
+        params.append(name)
+        conn.execute(f"UPDATE channels SET {', '.join(updates)} WHERE name = ?", tuple(params))
         conn.commit()
-        return {"result": f"频道 {name} 描述更新成功。"}
+        return {"result": f"频道 {name} 更新成功。"}
     except Exception as e:
         return {"error": str(e)}
+
+
+SET_CHANNEL_GATEKEEPER_DEF = ToolDefinition(
+    name="set_channel_gatekeeper",
+    description="开启、关闭或查询资讯频道的 AI 守门员 (Gatekeeper) 审核状态。关闭后该频道的新动态将跳过大模型审核直接免审广播（适用于交易员/博主等低频关键动态源）；开启后恢复大模型评估去重。当 enable 参数未传时，执行查询操作。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "channel_name": {
+                "type": "string",
+                "description": "频道名称（如 'gate_streamer', 'odaily_news'），支持 'all' 表示操作所有频道"
+            },
+            "enable": {
+                "type": "boolean",
+                "description": "可选。true: 开启 Gatekeeper 审核；false: 关闭 Gatekeeper（免审直通广播）。如果不传，则查询当前 Gatekeeper 状态。"
+            }
+        },
+        "required": ["channel_name"]
+    }
+)
+
+def set_channel_gatekeeper_executor(args: dict, msg: Message, sender: Sender = None) -> dict:
+    channel_name = args.get("channel_name")
+    enable = args.get("enable")
+    if not channel_name:
+        return {"error": "缺少必要参数: channel_name"}
+
+    try:
+        from runtime import context
+        conn = context.db.get_conn()
+
+        # If enable is not specified, treat as query (READ)
+        if enable is None:
+            if channel_name.lower() == "all":
+                cur = conn.execute("SELECT name, description, enable_gatekeeper FROM channels")
+                rows = cur.fetchall()
+                if not rows:
+                    return {"result": "系统中目前没有任何频道。"}
+                res = "各频道 Gatekeeper 状态如下：\n"
+                for r in rows:
+                    gk_flag = r['enable_gatekeeper'] if 'enable_gatekeeper' in r.keys() else 1
+                    st = "已开启" if gk_flag == 1 else "已关闭(免审直通)"
+                    res += f"- {r['name']}: {st}\n"
+                return {"result": res.strip()}
+            else:
+                cur = conn.execute("SELECT name, description, enable_gatekeeper FROM channels WHERE name = ?", (channel_name,))
+                row = cur.fetchone()
+                if not row:
+                    return {"error": f"频道 '{channel_name}' 不存在"}
+                gk_flag = row['enable_gatekeeper'] if 'enable_gatekeeper' in row.keys() else 1
+                st = "已开启" if gk_flag == 1 else "已关闭(免审直通)"
+                return {"result": f"频道 '{channel_name}' 的 Gatekeeper 当前状态为: {st}"}
+
+        # Security check: verify superuser permission for write/update
+        from config import is_superuser
+        if not is_superuser(msg.frontend, msg.context.user_id):
+            return {"error": "权限不足：仅管理员/超级用户可以更改频道的 Gatekeeper 状态。"}
+
+        flag = 1 if enable else 0
+        status_desc = "已开启 (正常大模型审核评估)" if flag == 1 else "已关闭 (免审直通，新消息直接广播)"
+
+        if channel_name.lower() == "all":
+            conn.execute("UPDATE channels SET enable_gatekeeper = ?", (flag,))
+            conn.commit()
+            return {"result": f"已成功为所有频道更新 Gatekeeper 状态为: {status_desc}"}
+        else:
+            cur = conn.execute("SELECT id FROM channels WHERE name = ?", (channel_name,))
+            if not cur.fetchone():
+                return {"error": f"频道 '{channel_name}' 不存在"}
+            conn.execute("UPDATE channels SET enable_gatekeeper = ? WHERE name = ?", (flag, channel_name))
+            conn.commit()
+            return {"result": f"频道 '{channel_name}' 的 Gatekeeper 状态更新成功: {status_desc}"}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 SEARCH_FEEDS_DEF = ToolDefinition(
     name="search_feeds",
@@ -973,6 +1079,11 @@ def merge_channels_executor(args: dict, msg: Message, sender: Sender = None) -> 
         return {"error": "Missing source or target"}
     if source == target:
         return {"error": "Source and target must be different"}
+
+    from config import is_superuser
+    if not is_superuser(msg.frontend, msg.context.user_id):
+        return {"error": "权限不足：仅管理员/超级用户可以合并或删除资讯频道。"}
+
     try:
         from runtime import context
         conn = context.db.get_conn()
@@ -994,6 +1105,41 @@ def merge_channels_executor(args: dict, msg: Message, sender: Sender = None) -> 
         return {"result": f"成功将频道 {source} 合并至 {target}。"}
     except Exception as e:
         return {"error": str(e)}
+
+DELETE_CHANNEL_DEF = ToolDefinition(
+    name="delete_channel",
+    description="删除指定的资讯频道及其关联的订阅和历史资讯（仅管理员/超级用户可用）。",
+    parameters={
+        "type": "object",
+        "properties": {
+            "channel_name": {"type": "string", "description": "要删除的频道唯一名称（如 'bojicoin'）"}
+        },
+        "required": ["channel_name"]
+    }
+)
+
+def delete_channel_executor(args: dict, msg: Message, sender: Sender = None) -> dict:
+    channel_name = args.get("channel_name")
+    if not channel_name:
+        return {"error": "缺少必要参数: channel_name"}
+
+    from config import is_superuser
+    if not is_superuser(msg.frontend, msg.context.user_id):
+        return {"error": "权限不足：仅管理员/超级用户可以删除资讯频道。"}
+
+    try:
+        from runtime import context
+        conn = context.db.get_conn()
+        cur = conn.execute("SELECT id FROM channels WHERE name = ?", (channel_name,))
+        if not cur.fetchone():
+            return {"error": f"频道 '{channel_name}' 不存在"}
+
+        conn.execute("DELETE FROM channels WHERE name = ?", (channel_name,))
+        conn.commit()
+        return {"result": f"已成功删除频道 '{channel_name}' 及其关联数据。"}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 SUBSCRIBE_CHANNEL_DEF = ToolDefinition(
     name="subscribe_channel",
@@ -1237,6 +1383,8 @@ def register_builtin_tools(registry, message_store: MessageStore, state_store: S
     registry.register_builtin(ADD_CHANNEL_DEF, add_channel_executor)
     registry.register_builtin(LIST_CHANNELS_DEF, list_channels_executor)
     registry.register_builtin(UPDATE_CHANNEL_DEF, update_channel_executor)
+    registry.register_builtin(DELETE_CHANNEL_DEF, delete_channel_executor)
+    registry.register_builtin(SET_CHANNEL_GATEKEEPER_DEF, set_channel_gatekeeper_executor)
     registry.register_builtin(MERGE_CHANNELS_DEF, merge_channels_executor)
     registry.register_builtin(SUBSCRIBE_CHANNEL_DEF, subscribe_channel_executor)
     registry.register_builtin(UNSUBSCRIBE_CHANNEL_DEF, unsubscribe_channel_executor)
