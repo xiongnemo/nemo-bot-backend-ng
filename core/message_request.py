@@ -17,6 +17,7 @@ class MessageRequest:
             or (self.reply_to.get("message_id") if isinstance(self.reply_to, dict) else "")
             or ""
         )
+        self.is_agent: bool = bool(request.get("is_agent", False))
 
     @property
     def message_id(self) -> str:

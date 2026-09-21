@@ -77,6 +77,7 @@ class ToolExecutor:
         msg_dict = message.to_dict()
         msg_dict["request"]["args"] = query_str
         msg_dict["request"]["command"] = plugin_name
+        msg_dict["request"]["is_agent"] = True
         
         config = self.state_store.get_plugin_config(plugin_name)
         

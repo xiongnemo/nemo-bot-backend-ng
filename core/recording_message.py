@@ -61,6 +61,7 @@ class RecordingMessage:
                 "raw_message": self.request.raw_message,
                 "reply_to": self.request.reply_to,
                 "message_id": self.request.message_id,
+                "is_agent": getattr(self.request, "is_agent", False),
             },
         }
 

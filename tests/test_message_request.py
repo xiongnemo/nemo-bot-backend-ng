@@ -64,6 +64,26 @@ class TestMessageRequest(unittest.TestCase):
         self.assertEqual(rd["request"]["message_id"], "reply_999")
         self.assertEqual(rd["request"]["reply_to"]["message_id"], "reply_999")
 
+    def test_message_request_is_agent(self):
+        req_default = MessageRequest({"args": "BTC", "command": "ticker"})
+        self.assertFalse(req_default.is_agent)
+
+        req_agent = MessageRequest({"args": "BTC", "command": "ticker", "is_agent": True})
+        self.assertTrue(req_agent.is_agent)
+
+        payload = {
+            "frontend": "onebot",
+            "context": {"group_id": "100", "user_id": "200"},
+            "request": {"command": "ticker", "args": "BTC", "is_agent": True}
+        }
+        msg = Message(payload)
+        self.assertTrue(msg.request.is_agent)
+        self.assertTrue(msg.to_dict()["request"]["is_agent"])
+
+        rec = RecordingMessage(payload)
+        self.assertTrue(rec.request.is_agent)
+        self.assertTrue(rec.to_dict()["request"]["is_agent"])
+
 
 if __name__ == "__main__":
     unittest.main()
