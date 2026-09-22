@@ -222,12 +222,63 @@ class AgentRunner:
             except Exception:
                 logger.exception("Failed to load recent media context")
             
+        # Files context injection
+        from config import is_superuser
+        is_su = is_superuser(message.frontend, message.context.user_id)
+
+        files_str = ""
+        current_files = list(getattr(message.request, "files", []))
+        if getattr(message.request, "reply_to", None):
+            reply_id = str(message.request.reply_to.get("message_id", ""))
+            from runtime import context as rt_context
+            fstore = getattr(rt_context, "file_store", None)
+            if fstore and reply_id:
+                current_files.extend(fstore.get_files_by_message(reply_id))
+
+        if not current_files and is_su:
+            from runtime import context as rt_context
+            fstore = getattr(rt_context, "file_store", None)
+            if fstore:
+                recent_files = fstore.get_recent_files(
+                    frontend=message.frontend,
+                    group_id=gid,
+                    user_id=uid if not gid else "",
+                    limit=1,
+                    max_age_seconds=1800.0,
+                )
+                current_files.extend(recent_files)
+
+        if current_files:
+            file_items = []
+            for f in current_files:
+                fname = f.get("file_name", "未知文件")
+                fid = f.get("id") or f.get("file_id")
+                fsize = f.get("file_size", 0)
+                mtype = f.get("mime_type", "")
+                size_kb = f"{fsize / 1024:.1f} KB" if fsize else "未知大小"
+
+                def _is_img(item):
+                    fn = (item.get("file_name") or "").lower()
+                    mt = (item.get("mime_type") or "").lower()
+                    return mt.startswith("image/") or fn.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"))
+
+                if not is_su and not _is_img(f):
+                    continue
+
+                item_desc = f"- [文件: {fname}] (ID: {fid}, 大小: {size_kb}, 类型: {mtype})"
+                if is_su and not _is_img(f):
+                    item_desc += "\n  （系统提示：此文件已安全下载至本地。若需要阅读或分析此文件内容，请主动调用 `read_document` 工具，传入文件名或ID！）"
+                file_items.append(item_desc)
+
+            if file_items:
+                files_str = "\n\n【消息附带或关联的文件列表】:\n" + "\n".join(file_items)
+
         # Append new user message with speaker injection if in group
         if gid:
             group_info = f" (Group: {message.context.group_name})" if getattr(message.context, "group_name", "") else ""
-            formatted_query = f"[{message.context.user_name} (ID: {uid}){group_info}]:\n{query}{reply_ctx}{img_str}"
+            formatted_query = f"[{message.context.user_name} (ID: {uid}){group_info}]:\n{query}{reply_ctx}{img_str}{files_str}"
         else:
-            formatted_query = f"{query}{reply_ctx}{img_str}"
+            formatted_query = f"{query}{reply_ctx}{img_str}{files_str}"
             
         messages.append(ChatMessage(role="user", content=formatted_query))
         

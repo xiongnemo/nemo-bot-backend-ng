@@ -173,4 +173,23 @@ CREATE TABLE IF NOT EXISTS topics (
     created_at    REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_topics_scope ON topics(scope_key, created_at);
+
+-- Ingested & Received Files
+CREATE TABLE IF NOT EXISTS files (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id     TEXT NOT NULL,
+    file_name   TEXT NOT NULL,
+    file_size   INTEGER DEFAULT 0,
+    mime_type   TEXT DEFAULT '',
+    frontend    TEXT NOT NULL,
+    group_id    TEXT DEFAULT '',
+    user_id     TEXT NOT NULL,
+    message_id  TEXT NOT NULL,
+    local_path  TEXT NOT NULL,
+    url         TEXT DEFAULT '',
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_files_msg_id ON files(message_id);
+CREATE INDEX IF NOT EXISTS idx_files_scope ON files(frontend, group_id, user_id, created_at);
 """
+

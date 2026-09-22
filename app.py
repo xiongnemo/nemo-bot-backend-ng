@@ -109,6 +109,9 @@ def setup():
     personas_dir = os.path.join(os.path.dirname(__file__), "personas")
     context.persona_store = PersonaStore(personas_dir, state_store)
 
+    from store.file_store import FileStore
+    context.file_store = FileStore(db)
+
     # 3. LLM
     init_registry(app_config.backend_config.get("llm", {}))
 
@@ -482,6 +485,35 @@ def _handle_ingest(payload: dict):
                 logger.info("Alias expanded: %s -> %s", first_word, alias_target)
         # --- Alias Interception End ---
 
+        # --- File Ingestion and Recording Start ---
+        saved_files = []
+        if msg.files:
+            logger.info(
+                "[File Ingest] Received %d file(s) from %s in %s (Msg #%s)",
+                len(msg.files), msg.user_id, msg.group_id or "DM", msg.message_id
+            )
+            from runtime import context as rt_context
+            fstore = getattr(rt_context, "file_store", None)
+            if fstore:
+                for f_info in msg.files:
+                    try:
+                        rec = fstore.save_and_record_file(
+                            f_info,
+                            frontend=msg.frontend,
+                            group_id=msg.group_id,
+                            user_id=msg.user_id,
+                            message_id=msg.message_id,
+                        )
+                        saved_files.append(rec)
+                        logger.info(
+                            "[File Ingest] Ingested file #%s: '%s' (%d bytes, mime: %s, local: %s)",
+                            rec.get("id"), rec.get("file_name"), rec.get("file_size", 0),
+                            rec.get("mime_type", ""), "YES" if rec.get("local_path") else "PENDING"
+                        )
+                    except Exception as fe:
+                        logger.warning("Failed to save and record incoming file %s: %s", f_info, fe)
+        # --- File Ingestion and Recording End ---
+
         route = router.route(msg)
         logger.info(
             "Routed message %r (from %s in %s) -> mode: %s, plugin: %s, args: %r",
@@ -490,6 +522,8 @@ def _handle_ingest(payload: dict):
 
         from core.message import Message
         raw_msg = Message(payload)
+        raw_msg.request.files = saved_files
+        payload["request"]["files"] = saved_files
 
         # --- ACL Logic Start ---
         from config import is_superuser, get_platform, get_rejection_phrases
@@ -500,7 +534,27 @@ def _handle_ingest(payload: dict):
         primary_uid = state_store.get("user_link", "global", link_key, default=msg.user_id)
         
         is_su = is_superuser(msg.frontend, msg.user_id)
-        
+
+        # File Security Policy: Non-superusers CANNOT process non-image files!
+        if not is_su:
+            def _is_image_file(f: dict) -> bool:
+                fname = (f.get("file_name") or f.get("name") or "").lower()
+                mtype = (f.get("mime_type") or "").lower()
+                if mtype.startswith("image/"):
+                    return True
+                return fname.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".ico", ".tiff", ".svg"))
+
+            non_img_files = [f for f in saved_files if not _is_image_file(f)]
+            if non_img_files and route.mode == "agent":
+                logger.info(
+                    "Non-superuser %s sent non-image file(s) %s to agent. Rejecting due to security risk.",
+                    msg.user_id, [f.get("file_name") for f in non_img_files]
+                )
+                from core.types import Action
+                rejection = "抱歉，由于安全风险，我无法处理未知文件（如 Word、PDF 等），该操作需要由 Bot 超级管理员来处理。"
+                sender.deliver_actions(payload, [Action(kind="reply", text=rejection)])
+                return
+
         if not is_su and route.mode in ["command", "agent"]:
             global_blacklist = state_store.get("acl", "global", "blacklist", default=[])
             target_user = f"user_{primary_uid}"

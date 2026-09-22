@@ -62,6 +62,7 @@ class RecordingMessage:
                 "reply_to": self.request.reply_to,
                 "message_id": self.request.message_id,
                 "is_agent": getattr(self.request, "is_agent", False),
+                "files": getattr(self.request, "files", []),
             },
         }
 

@@ -4,6 +4,8 @@ Superuser Tools — High-privilege tools only available to superusers.
 
 from __future__ import annotations
 
+import os
+import logging
 import platform
 import subprocess
 from typing import Any
@@ -11,6 +13,9 @@ from typing import Any
 from core.message import Message
 from nemollm.types import ToolDefinition
 from store.state_store import StateStore
+from config import is_superuser
+
+logger = logging.getLogger(__name__)
 
 # 1. Shell Execution
 SHELL_DEF = ToolDefinition(
@@ -239,6 +244,133 @@ def admin_affinity_executor(args: dict, msg: Message) -> dict:
     return {"error": f"未知 action: {action}"}
 
 
+# 5. Document Reading (PDF, Word, Text)
+READ_DOCUMENT_DEF = ToolDefinition(
+    name="read_document",
+    description=(
+        "解析并读取用户发送或群聊中的 PDF、Word (.docx) 以及代码/文本文件的内容。\n"
+        "仅限超级管理员使用（出于系统安全考量，非管理员无法使用此工具）。\n"
+        "支持传入 query（文件名、关键词或文件ID），不提供则自动读取最新收到的文档。\n"
+        "【回复要求】：调用本工具获取文档后，你必须在回答中对文档的核心内容、主旨与结论进行归纳汇报，严禁在获取文档后忽略其内容。"
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "文件名、文件关键词或文件数据库ID。如果不提供，默认读取最新接收到的文档文件。",
+            },
+            "max_pages": {
+                "type": "integer",
+                "description": "读取 PDF 时的最大页数（默认 20 页）。",
+            },
+        },
+    },
+)
+
+def read_document_executor(args: dict, msg: Message) -> dict:
+    import os
+    from config import is_superuser
+    if not is_superuser(msg.frontend, msg.context.user_id):
+        return {"error": "权限拒绝：由于安全风险，非管理员无法处理未知文件（如 Word、PDF 等），需要让超级管理员来。"}
+
+    from runtime import context
+    fstore = getattr(context, "file_store", None)
+    if not fstore:
+        try:
+            from store.database import Database
+            from store.file_store import FileStore
+            fstore = FileStore(Database())
+            context.file_store = fstore
+        except Exception:
+            fstore = None
+
+    query = str(args.get("query") or "").strip()
+    max_pages = int(args.get("max_pages") or 20)
+
+    target_file = None
+    # 1. Direct message files
+    current_files = getattr(msg.request, "files", [])
+    if current_files and not query:
+        target_file = current_files[-1]
+
+    # 2. Query search
+    if not target_file and query:
+        target_file = fstore.find_file(query, group_id=msg.context.group_id, user_id=msg.context.user_id)
+
+    # 3. Quoted reply
+    if not target_file and msg.request.reply_to:
+        reply_id = str(msg.request.reply_to.get("message_id", ""))
+        rfiles = fstore.get_files_by_message(reply_id)
+        if rfiles:
+            target_file = rfiles[-1]
+
+    # 4. Recent files in scope
+    if not target_file:
+        recent = fstore.get_recent_files(
+            frontend=msg.frontend,
+            group_id=msg.context.group_id,
+            user_id=msg.context.user_id if not msg.context.group_id else "",
+            limit=1,
+            max_age_seconds=86400.0,
+        )
+        if recent:
+            target_file = recent[0]
+
+    logger.info(
+        "[AgentTool:read_document] Requested by %s in %s (query: %r, max_pages: %d)",
+        msg.context.user_id, msg.context.group_id or "DM", query, max_pages
+    )
+
+    if not target_file:
+        logger.warning("[AgentTool:read_document] Target file not found for query %r", query)
+        return {"error": "未找到可供解析的文档文件。请检查文件名或重新发送该文件。"}
+
+    local_path = target_file.get("local_path", "")
+    if not local_path or not os.path.exists(local_path):
+        if fstore and hasattr(fstore, "ensure_local_file"):
+            local_path = fstore.ensure_local_file(target_file)
+            
+    if not local_path or not os.path.exists(local_path):
+        logger.warning("[AgentTool:read_document] File '%s' not present on disk", target_file.get("file_name"))
+        return {"error": f"文件 '{target_file.get('file_name')}' 在本地磁盘不存在或尚未完成下载。"}
+
+    from core.document_parser import parse_document
+    parsed = parse_document(local_path, max_pages=max_pages)
+    if not parsed.get("ok"):
+        logger.warning("[AgentTool:read_document] Parse error for '%s': %s", target_file.get("file_name"), parsed.get("error"))
+        return {"error": parsed.get("error", "解析失败")}
+
+    raw_content = parsed.get("content", "")
+    content_len = len(raw_content)
+    MAX_TOOL_CONTENT = 35000
+    if content_len > MAX_TOOL_CONTENT:
+        head_chars = 25000
+        tail_chars = 8000
+        omitted = content_len - head_chars - tail_chars
+        content = (
+            raw_content[:head_chars]
+            + f"\n\n... [为防止上下文超出限制，中间省略了 {omitted} 字符的详细数据/参考文献，保留核心分析与结尾结论] ...\n\n"
+            + raw_content[-tail_chars:]
+        )
+    else:
+        content = raw_content
+
+    logger.info(
+        "[AgentTool:read_document] Successfully parsed '%s' (%s, %d/%d pages, %d chars -> %d chars)",
+        target_file.get("file_name"), parsed.get("type"), parsed.get("read_pages", 1),
+        parsed.get("page_count", 1), content_len, len(content)
+    )
+
+    return {
+        "file_name": target_file.get("file_name"),
+        "file_type": parsed.get("type"),
+        "page_count": parsed.get("page_count"),
+        "read_pages": parsed.get("read_pages"),
+        "content": content,
+    }
+
+
 def register_superuser_tools(registry, state_store: StateStore):
     """Register all superuser tools with injected dependencies."""
     
@@ -263,5 +395,11 @@ def register_superuser_tools(registry, state_store: StateStore):
     registry.register_builtin(
         ADMIN_AFFINITY_DEF,
         lambda args, msg, sender: admin_affinity_executor(args, msg),
+        requires_superuser=True,
+    )
+
+    registry.register_builtin(
+        READ_DOCUMENT_DEF,
+        lambda args, msg, sender: read_document_executor(args, msg),
         requires_superuser=True,
     )

@@ -18,6 +18,7 @@ class MessageRequest:
             or ""
         )
         self.is_agent: bool = bool(request.get("is_agent", False))
+        self.files: list[dict] = list(request.get("files", []))
 
     @property
     def message_id(self) -> str:

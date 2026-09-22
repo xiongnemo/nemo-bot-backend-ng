@@ -33,3 +33,14 @@
 - **`app_config` 找不到**
   - **坑点描述**：在插件里习惯性地写 `from config import app_config`，导致 `ImportError`。
   - **避坑准则**：新版后端的全局字典叫 `backend_config`。导入姿势应该是 `from config import backend_config`。
+
+## 6. 日志与 Logger 初始化规范
+- **函数内部调用 `logger` 抛出 `NameError`**
+  - **坑点描述**：在核心组件、工具（如 `agent/superuser_tools.py`）或插件中顺手写了 `logger.info(...)`，由于 Python 是动态查找变量，模块加载和 `python app.py --check` 初始化时只要没进入该执行路径就不会报错；但一旦真实场景走到该分支（如 Agent 决定调用工具），就会直接抛出致命的 `NameError: name 'logger' is not defined`，导致请求彻底中断。
+  - **避坑准则**：任何调用 `logger` 的文件，**必须**在模块顶部显式写入：
+    ```python
+    import logging
+    logger = logging.getLogger(__name__)
+    ```
+    绝不能假定父层或运行环境已经提供了全局 `logger`。
+

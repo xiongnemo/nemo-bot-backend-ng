@@ -106,6 +106,7 @@ class IngestMessage:
     timestamp: float = 0.0
     nickname: str = ""
     reply_to: dict | None = None
+    files: list[dict] = field(default_factory=list)
 
     @property
     def full_text(self) -> str:
@@ -130,6 +131,7 @@ class IngestMessage:
                 "imgs": self.imgs,
                 "raw_message": self.raw_message,
                 "reply_to": self.reply_to,
+                "files": self.files,
             },
         }
 
@@ -155,4 +157,5 @@ class IngestMessage:
             timestamp=float(d.get("timestamp", _time.time())),
             nickname=str(ctx.get("nickname", "")),
             reply_to=req.get("reply_to", None),
+            files=list(req.get("files", [])),
         )
