@@ -525,22 +525,27 @@ def fetch_hyperliquid(base: str, quote: str, market: str, attempts: list):
     return None
 
 ALL_FLAGS = {'-A', '--ALL', '-ALL', 'ALL', '全', '全网', '全平台', '全部'}
+TREND_FLAGS = {'-T', '--TREND', '-TREND', 'TREND', '-V', '--VEGAS', '-VEGAS', 'VEGAS', '趋势', '画线', '隧道'}
 
 def parse_args(args_str: str):
     raw_tokens = [t.strip() for t in args_str.split() if t.strip()]
     if not raw_tokens:
-        return None, None, None, None, None, False, False
+        return None, None, None, None, None, False, False, False
         
     query_all = False
+    query_trend = False
     filtered_tokens = []
     for t in raw_tokens:
-        if t.upper() in ALL_FLAGS:
+        t_up = t.upper()
+        if t_up in ALL_FLAGS:
             query_all = True
+        elif t_up in TREND_FLAGS:
+            query_trend = True
         else:
             filtered_tokens.append(t)
 
     if not filtered_tokens:
-        return None, None, None, None, None, False, query_all
+        return None, None, None, None, None, False, query_all, query_trend
 
     symbol_raw = filtered_tokens[0].upper()
     base, quote = None, None
@@ -576,15 +581,21 @@ def parse_args(args_str: str):
             if market is None:
                 market = t_lower
         
-    return base, quote, exchange, market, symbol_raw, explicit_exchange, query_all
+    return base, quote, exchange, market, symbol_raw, explicit_exchange, query_all, query_trend
 
 @generic_exception_handler
 def bot_execute(message: Message, config: dict):
     args_str = message.request.args
-    base, quote, exchange, market, symbol_raw, explicit_exchange, query_all = parse_args(args_str)
+    base, quote, exchange, market, symbol_raw, explicit_exchange, query_all, query_trend = parse_args(args_str)
     
     if not base:
         message.reply("400: nemo: 请提供标的名称，例如 `coin BTC` 或 `coin BTC -a`")
+        return
+
+    if query_trend:
+        from plugins import crypto_trend
+        message.request.args = base
+        crypto_trend.bot_execute(message, config)
         return
         
     is_agent = getattr(message.request, "is_agent", False)
@@ -648,7 +659,9 @@ def bot_execute(message: Message, config: dict):
         
         if successful_results:
             separator = "\n\n" + "═" * 30 + "\n\n"
-            message.reply(separator.join(successful_results))
+            msg = separator.join(successful_results)
+            msg += f"\n\n💡 提示: 发送 `vegas {base}` 可查看 5m/15m/30m/1h/4h/1d 级别 Vegas 隧道与多周期动态支撑/压力位。"
+            message.reply(msg)
         else:
             attempts_str = "\n".join([f"- {a}" for a in attempts])
             msg = f"404: nemo: 找不到相关的行情数据。\n我们为你同时尝试了以下交易所查询路径:\n{attempts_str}\n"
@@ -661,7 +674,7 @@ def bot_execute(message: Message, config: dict):
     current_quote = quote if quote is not None else 'USDT'
     result = fetch_binance(base, current_quote, market, attempts)
     if result:
-        message.reply(result)
+        message.reply(f"{result}\n\n💡 提示: 发送 `vegas {base}` 可查看 5m/15m/30m/1h/4h/1d 级别 Vegas 隧道与多周期动态支撑/压力位。")
         return
 
     # Fallback to other exchanges if not found on Binance (e.g. MSFT or niche tokens)
