@@ -12,6 +12,7 @@ from store.user_thread import UserThreadStore
 from store.group_digest import GroupDigestStore
 from agent.context_loader import (
     load_weighted_history, retrieve_related, trim_memory_blocks, _split_turns,
+    load_interturn_chatter,
 )
 
 T0 = 1_700_000_000.0
@@ -20,7 +21,7 @@ HOUR = 3600.0
 
 class LayeredBase(unittest.TestCase):
     def setUp(self):
-        self.path = "data/test_layered.sqlite"
+        self.path = f"data/test_layered_{self._testMethodName}.sqlite"
         self._cleanup()
         self.db = Database(self.path)
         self.state_store = StateStore(self.db)
@@ -29,6 +30,8 @@ class LayeredBase(unittest.TestCase):
         self._cleanup()
 
     def _cleanup(self):
+        if hasattr(self, "db"):
+            self.db.close()
         for ext in ["", "-shm", "-wal"]:
             p = self.path + ext
             if os.path.exists(p):
@@ -228,6 +231,231 @@ class TestContextLoader(LayeredBase):
         # high-priority truncation
         out_trunc = trim_memory_blocks([(1, "X" * 500)], budget_chars=300)
         self.assertTrue(out_trunc[0].endswith("…"))
+
+
+    def test_load_interturn_chatter_basic(self):
+        msg_store = MessageStore(self.db)
+        scope = "agent:onebot:group:g1"
+        # Prior turn at T0
+        conn = self.db.get_conn()
+        conn.execute(
+            "INSERT INTO conversations (scope_key, role, content, metadata_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (scope, "assistant", "你好", "{}", T0),
+        )
+        conn.commit()
+
+        # Messages between T0 and T0 + 100
+        msg_store.ingest(frontend="onebot", group_id="g1", user_id="u1", user_name="韭菜",
+                         text="画线paxg 30m", message_id="m1", timestamp=T0 + 10)
+        msg_store.ingest(frontend="onebot", group_id="g1", user_id="u2", user_name="小李",
+                         text="看看这个", imgs=["http://img.jpg"], message_id="m2", timestamp=T0 + 20)
+        msg_store.ingest(frontend="onebot", group_id="g1", user_id="u1", user_name="韭菜",
+                         text="多行内容\n第二行", message_id="m3", timestamp=T0 + 30)
+        # Current message that triggers agent
+        msg_store.ingest(frontend="onebot", group_id="g1", user_id="u1", user_name="韭菜",
+                         text="帮我算一下", message_id="cur_id", timestamp=T0 + 40)
+
+        lines = load_interturn_chatter(
+            msg_store=msg_store,
+            db=self.db,
+            group_id="g1",
+            scope_key=scope,
+            current_msg_id="cur_id",
+            current_ts=T0 + 40,
+        )
+        self.assertEqual(len(lines), 3)
+        self.assertIn("[msg_id: m1] 韭菜: 画线paxg 30m", lines[0])
+        self.assertIn("[msg_id: m2] 小李: 看看这个 [附图]", lines[1])
+        self.assertIn("[msg_id: m3] 韭菜: 多行内容 第二行", lines[2])
+        # Current message must not be in the output
+        self.assertFalse(any("帮我算一下" in l for l in lines))
+
+    def test_send_message_with_reply_to_target_id(self):
+        from agent.builtin_tools import send_message_executor
+        from core.message import Message
+
+        delivered_actions = []
+
+        class MockSender:
+            def send_text(self, message_dict, text, reply=True, target_id=None):
+                delivered_actions.append({"text": text, "reply": reply, "target_id": target_id})
+
+        msg = Message({
+            "frontend": "onebot",
+            "context": {"group_id": "g1", "user_id": "u1", "message_id": "cur_msg_id"},
+            "request": {"command": "", "args": "", "imgs": [], "raw_message": ""},
+        })
+
+        sender = MockSender()
+        # Default without message_id
+        res1 = send_message_executor({"text": "回复当前"}, msg, sender)
+        self.assertEqual(delivered_actions[-1]["target_id"], None)
+        self.assertTrue(delivered_actions[-1]["reply"])
+
+        # With specific message_id
+        res2 = send_message_executor({"text": "顺便回复之前那条", "message_id": "historical_123"}, msg, sender)
+        self.assertEqual(delivered_actions[-1]["target_id"], "historical_123")
+        self.assertTrue(delivered_actions[-1]["reply"])
+        self.assertIn("historical_123", res2["result"])
+
+    def test_sender_deliver_one_target_id(self):
+        from runtime.sender import Sender
+        from unittest.mock import patch, MagicMock
+
+        sender = Sender()
+        mock_adapter = MagicMock()
+
+        with patch("importlib.import_module", return_value=mock_adapter):
+            sender.send_text(
+                {"frontend": "onebot", "context": {"group_id": "g1", "user_id": "u1", "message_id": "cur_id"}},
+                "顺便回复",
+                reply=True,
+                target_id="history_999",
+            )
+            call_kwargs = mock_adapter.send_msg.call_args.kwargs
+            self.assertEqual(call_kwargs["context"].message_id, "history_999")
+            self.assertTrue(call_kwargs["reply"])
+
+    def test_message_store_get_by_message_id(self):
+        msg_store = MessageStore(self.db)
+        msg_store.ingest(
+            frontend="onebot", group_id="g1", user_id="u_alice", user_name="爱丽丝",
+            text="hello world", message_id="msg_alice_1", timestamp=T0,
+        )
+        row = msg_store.get_by_message_id("msg_alice_1")
+        self.assertIsNotNone(row)
+        self.assertEqual(row["user_id"], "u_alice")
+        self.assertEqual(row["user_name"], "爱丽丝")
+        self.assertEqual(row["text"], "hello world")
+
+        self.assertIsNone(msg_store.get_by_message_id("non_existent"))
+        self.assertIsNone(msg_store.get_by_message_id(""))
+
+    def test_runner_send_message_per_person_rate_limiting(self):
+        from agent.runner import AgentRunner
+        from agent.tool_registry import ToolRegistry
+        from agent.tool_executor import ToolExecutor
+        from agent.builtin_tools import register_builtin_tools
+        from nemollm.memory import ConversationMemory
+        from runtime import context as rt_context
+        from nemollm.types import ToolCall
+        from nemollm import ChatMessage
+        from core.message import Message
+        from unittest.mock import MagicMock, patch
+
+        msg_store = MessageStore(self.db)
+        rt_context.msg_store = msg_store
+        msg_store.ingest(frontend="onebot", group_id="g1", user_id="u1", user_name="Alice",
+                         text="Alice says hi", message_id="mid_alice_1", timestamp=T0)
+        msg_store.ingest(frontend="onebot", group_id="g1", user_id="u1", user_name="Alice",
+                         text="Alice says bye", message_id="mid_alice_2", timestamp=T0 + 1)
+        msg_store.ingest(frontend="onebot", group_id="g1", user_id="u2", user_name="Bob",
+                         text="Bob asks a question", message_id="mid_bob_1", timestamp=T0 + 2)
+
+        registry = ToolRegistry()
+        mock_sender = MagicMock()
+        register_builtin_tools(registry, msg_store, self.state_store, None)
+        executor = ToolExecutor(registry, None, self.state_store, mock_sender)
+        memory = ConversationMemory(self.conv)
+        runner = AgentRunner(memory, self.state_store, registry, executor)
+
+        resp1 = MagicMock()
+        resp1.text = ""
+        resp1.tool_calls = [
+            ToolCall(id="tc1", name="send_message", arguments={"text": "hi Alice", "message_id": "mid_alice_1"}),
+            ToolCall(id="tc2", name="send_message", arguments={"text": "hi Bob", "message_id": "mid_bob_1"}),
+        ]
+
+        resp2 = MagicMock()
+        resp2.text = ""
+        resp2.tool_calls = [
+            ToolCall(id="tc3", name="send_message", arguments={"text": "hi again Alice", "message_id": "mid_alice_2"}),
+        ]
+
+        resp3 = MagicMock()
+        resp3.text = "Answer to Charlie"
+        resp3.tool_calls = []
+
+        mock_client = MagicMock()
+        mock_client.chat.side_effect = [resp1, resp2, resp3]
+
+        with patch("nemollm.registry.get_registry") as mock_get_reg:
+            mock_reg_inst = MagicMock()
+            mock_reg_inst.get_models.return_value = [(mock_client, "fake-model")]
+            mock_get_reg.return_value = mock_reg_inst
+
+            trigger_msg = Message({
+                "frontend": "onebot",
+                "context": {"group_id": "g1", "user_id": "u3", "user_name": "Charlie", "message_id": "mid_charlie_1"},
+                "request": {"command": "", "args": "What about the market?", "imgs": [], "raw_message": ""},
+            })
+
+            actions = runner.run(trigger_msg, "What about the market?")
+            # mock_sender.send_text should have been called exactly twice (once Alice, once Bob)
+            self.assertEqual(mock_sender.send_text.call_count, 2)
+            targets = [c.kwargs.get("target_id") for c in mock_sender.send_text.call_args_list]
+            self.assertEqual(targets, ["mid_alice_1", "mid_bob_1"])
+
+            # Final action is the reply to Charlie
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0].text, "Answer to Charlie")
+
+    def test_load_interturn_chatter_cap_and_order(self):
+        msg_store = MessageStore(self.db)
+        scope = "agent:onebot:group:g2"
+        conn = self.db.get_conn()
+        conn.execute(
+            "INSERT INTO conversations (scope_key, role, content, metadata_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (scope, "assistant", "已回复", "{}", T0),
+        )
+        conn.commit()
+
+        # Ingest 20 messages
+        for i in range(20):
+            msg_store.ingest(frontend="onebot", group_id="g2", user_id="u", user_name="群友",
+                             text=f"消息{i:02d}", message_id=f"m_{i}", timestamp=T0 + 1 + i)
+
+        lines = load_interturn_chatter(
+            msg_store=msg_store,
+            db=self.db,
+            group_id="g2",
+            scope_key=scope,
+            current_ts=T0 + 25,
+            max_messages=5,
+        )
+        # Should be capped to 5 most recent (messages 15 to 19), in chronological order
+        self.assertEqual(len(lines), 5)
+        self.assertIn("消息15", lines[0])
+        self.assertIn("消息19", lines[4])
+
+    def test_load_interturn_chatter_lookback_limit(self):
+        msg_store = MessageStore(self.db)
+        scope = "agent:onebot:group:g3"
+        conn = self.db.get_conn()
+        # Prior turn was 10 hours ago
+        conn.execute(
+            "INSERT INTO conversations (scope_key, role, content, metadata_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (scope, "assistant", "早前回复", "{}", T0 - 36000),
+        )
+        conn.commit()
+
+        # Message older than max_lookback_seconds (7200s)
+        msg_store.ingest(frontend="onebot", group_id="g3", user_id="u", user_name="群友",
+                         text="太久远的消息", message_id="old_m", timestamp=T0 - 8000)
+        # Message within 2 hours
+        msg_store.ingest(frontend="onebot", group_id="g3", user_id="u", user_name="群友",
+                         text="近期的消息", message_id="recent_m", timestamp=T0 - 1000)
+
+        lines = load_interturn_chatter(
+            msg_store=msg_store,
+            db=self.db,
+            group_id="g3",
+            scope_key=scope,
+            current_ts=T0,
+            max_lookback_seconds=7200.0,
+        )
+        self.assertEqual(len(lines), 1)
+        self.assertIn("近期的消息", lines[0])
 
 
 if __name__ == "__main__":

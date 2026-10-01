@@ -90,18 +90,12 @@ class ToolRegistry:
         If _tool_description is absent, we synthesize one from _name + _man.
         Plugins without _name are skipped (not agent-compatible).
         """
-        import importlib
         import re
-        from plugins import plugin_names
+        from plugins import get_loaded_plugins
 
         count = 0
-        for module_name in plugin_names:
-            try:
-                mod = importlib.import_module(f"plugins.{module_name}")
-            except Exception:
-                logger.warning("Failed to import plugin module: %s", module_name, exc_info=True)
-                continue
-
+        loaded_plugins = get_loaded_plugins()
+        for module_name, mod in loaded_plugins.items():
             # Skip modules that don't declare _name (not a proper plugin)
             if not hasattr(mod, "_name"):
                 logger.debug("Skipping %s: no _name attribute", module_name)
@@ -130,4 +124,16 @@ class ToolRegistry:
             count += 1
 
         logger.info("Auto-discovered and registered %d plugin tools", count)
+
+    def reload_plugins(self) -> int:
+        """Re-discover and update plugin tools without removing built-in or superuser tools."""
+        from plugins import get_loaded_plugins
+        get_loaded_plugins(reload=True)
+
+        # Retain only non-plugin tools (built-in and superuser tools)
+        self._tools = {k: v for k, v in self._tools.items() if not v.is_plugin}
+        self.load_defaults()
+        plugin_count = len([v for v in self._tools.values() if v.is_plugin])
+        logger.info("ToolRegistry reloaded: %d plugin tools registered", plugin_count)
+        return plugin_count
 

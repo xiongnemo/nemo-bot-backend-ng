@@ -380,23 +380,25 @@ def think_executor(args: dict, msg: Message, sender: Sender = None, state_store:
 
 SEND_MESSAGE_DEF = ToolDefinition(
     name="send_message",
-    description="向用户发送文本消息。适用于执行长任务时的进度汇报，或者主动开启新话题。注意：在一轮对话中最多只能调用 1 次！如果所有思考与操作已结束准备给出最终结果，请直接在文本中自然回复，严禁调用此工具。",
+    description="向用户或群聊发送文本消息。可用于长任务进度播报、或顺便回复上下文中的其他群友历史发言。系统严格限制：在一轮对话中，对出现过的每个人最多只能发送 1 条消息（严禁向同一人多次发送刷屏）。如果指定了 message_id，则会直接引用回复该特定历史消息；若不指定则默认回复当前触发消息（当 is_reply 为 true 时）。注意：如果当前思考已结束且只想回答当前用户，请直接在文本中自然回复即可，严禁多此一举调用此工具。",
     parameters={
         "type": "object",
         "properties": {
             "text": {"type": "string", "description": "要发送的消息内容"},
-            "is_reply": {"type": "boolean", "description": "是否以回复的形式发送（如果是针对用户的请求，选true；如果是独立的新提醒/汇报，选false）", "default": True}
+            "is_reply": {"type": "boolean", "description": "是否以引用回复的形式发送，默认为 true", "default": True},
+            "message_id": {"type": "string", "description": "可选。指定要引用回复的具体消息 ID（例如在【两次交互之间的群聊现场发言】中看到的 [msg_id: xxx]）。若传入此项且 is_reply 为 true，将直接针对该条历史消息发起引用回复；若不传则默认回复当前触发你的消息。"},
         },
-        "required": ["text"]
-    }
+        "required": ["text"],
+    },
 )
 
 def send_message_executor(args: dict, msg: Message, sender: Sender = None) -> dict:
     text = args.get("text", "")
     is_reply = args.get("is_reply", True)
+    target_id = args.get("message_id") or args.get("target_id")
     if sender:
-        sender.send_text(msg.to_dict(), text, reply=is_reply)
-    return {"result": f"消息已发送。"}
+        sender.send_text(msg.to_dict(), text, reply=is_reply, target_id=str(target_id).strip() if target_id else None)
+    return {"result": f"消息已发送（已引用回复 message_id={target_id}）" if target_id else "消息已发送。"}
 
 ADD_REMINDER_DEF = ToolDefinition(
     name="send_delayed_message",

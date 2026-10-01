@@ -75,6 +75,16 @@ class MessageStore:
         ).fetchone()
         return row is not None
 
+    def get_by_message_id(self, message_id: str) -> dict | None:
+        """Fetch a single message by its message_id."""
+        if not message_id:
+            return None
+        conn = self.db.get_conn()
+        row = conn.execute(
+            "SELECT * FROM messages WHERE message_id = ? LIMIT 1", (str(message_id),)
+        ).fetchone()
+        return dict(row) if row else None
+
     # ------------------------------------------------------------------
     # Read
     # ------------------------------------------------------------------
@@ -158,6 +168,7 @@ class MessageStore:
         group_id: str = "",
         dm_user_id: str = "",
         limit: int = 20,
+        raw_fts: bool = False,
     ) -> list[dict]:
         """Search messages with optional FTS5 full-text search, user filtering, and group/DM scoping."""
         conn = self.db.get_conn()
@@ -204,8 +215,11 @@ class MessageStore:
         
         # Text search (FTS5) if query is provided and not wildcard
         if query and query != "*":
-            escaped_query = query.replace('"', '""')
-            fts_query = f'"{escaped_query}"'
+            if raw_fts:
+                fts_query = query
+            else:
+                escaped_query = query.replace('"', '""')
+                fts_query = f'"{escaped_query}"'
             
             sql = f"""SELECT m.* FROM messages m
                       JOIN messages_fts f ON m.id = f.rowid
@@ -227,6 +241,7 @@ class MessageStore:
         end_time: float | None = None,
         group_id: str = "",
         limit: int = 100,
+        order: str = "ASC",
     ) -> list[dict]:
         """Get messages within a specific time range."""
         conn = self.db.get_conn()
@@ -235,18 +250,20 @@ class MessageStore:
         if end_time is None:
             end_time = time.time()
             
+        sort_dir = "DESC" if str(order).upper() == "DESC" else "ASC"
+
         if group_id:
             rows = conn.execute(
-                """SELECT * FROM messages
+                f"""SELECT * FROM messages
                    WHERE group_id = ? AND timestamp >= ? AND timestamp <= ?
-                   ORDER BY timestamp ASC LIMIT ?""",
+                   ORDER BY timestamp {sort_dir} LIMIT ?""",
                 (group_id, start_time, end_time, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT * FROM messages
+                f"""SELECT * FROM messages
                    WHERE timestamp >= ? AND timestamp <= ?
-                   ORDER BY timestamp ASC LIMIT ?""",
+                   ORDER BY timestamp {sort_dir} LIMIT ?""",
                 (start_time, end_time, limit),
             ).fetchall()
         return [dict(r) for r in rows]

@@ -50,6 +50,8 @@ class TestAffinityToolChain(unittest.TestCase):
         self._cleanup()
 
     def _cleanup(self):
+        if hasattr(self, "db"):
+            self.db.close()
         for ext in ["", "-shm", "-wal"]:
             p = self.path + ext
             if os.path.exists(p):

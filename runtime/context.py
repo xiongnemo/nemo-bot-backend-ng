@@ -15,3 +15,7 @@ group_digest_store: Any = None
 msg_store: Any = None
 persona_store: Any = None
 file_store: Any = None
+ruleset: Any = None
+router: Any = None
+tool_registry: Any = None
+tool_executor: Any = None

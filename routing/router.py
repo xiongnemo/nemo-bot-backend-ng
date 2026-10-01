@@ -43,11 +43,12 @@ class Router:
             text = alias_target
 
         # 1. Built-in help/system commands
-        if text.startswith("man ") or text == "man":
-            args = text[4:].strip() if text.startswith("man ") else ""
+        cmd_text = text[1:].strip() if text.startswith(("/", "／")) else text
+        if cmd_text.startswith("man ") or cmd_text == "man":
+            args = cmd_text[4:].strip() if cmd_text.startswith("man ") else ""
             return RouteResult(mode="man", args=args)
-        if text.startswith("explain "):
-            return RouteResult(mode="explain", args=text[8:].strip())
+        if cmd_text.startswith("explain "):
+            return RouteResult(mode="explain", args=cmd_text[8:].strip())
 
         # 2. Deterministic Rule Match (Command)
         hit = self.ruleset.match(msg)

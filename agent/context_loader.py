@@ -12,10 +12,12 @@ Context loader — L2 speaker-weighted history + FTS retrieval + prompt budget.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
 from datetime import datetime
+from typing import Any
 
 from nemollm import ChatMessage
 
@@ -187,7 +189,7 @@ def retrieve_related(msg_store, group_id: str, query: str,
         return []
     match_expr = " OR ".join(f'"{t}"' for t in terms[:6])
     try:
-        rows = msg_store.search(match_expr, group_id=group_id, limit=top_k + 10)
+        rows = msg_store.search(match_expr, group_id=group_id, limit=top_k + 10, raw_fts=True)
     except Exception:
         return []
     cutoff = time.time() - exclude_recent_seconds
@@ -204,6 +206,106 @@ def retrieve_related(msg_store, group_id: str, query: str,
         if len(out) >= top_k:
             break
     return out
+
+
+def load_interturn_chatter(
+    msg_store: Any,
+    db: Any,
+    group_id: str,
+    scope_key: str,
+    current_msg_id: str = "",
+    current_ts: float | None = None,
+    max_messages: int = 30,
+    max_lookback_seconds: float = 7200.0,
+) -> list[str]:
+    """Retrieve raw group messages between the previous agent interaction and current message.
+
+    This provides ambient situational context (e.g. legacy command executions,
+    chatter among users, subject context) that occurred while the agent was silent.
+    """
+    if not group_id or not msg_store or not db:
+        return []
+
+    now = current_ts or time.time()
+
+    try:
+        conn = db.get_conn()
+        row = conn.execute(
+            "SELECT created_at FROM conversations WHERE scope_key = ? AND created_at < ? ORDER BY created_at DESC LIMIT 1",
+            (scope_key, now),
+        ).fetchone()
+
+        if row and row[0]:
+            last_agent_ts = float(row[0])
+        else:
+            last_agent_ts = now - 1800.0
+    except Exception as e:
+        logger.warning(f"Failed to query last agent turn for interturn chatter: {e}")
+        last_agent_ts = now - 1800.0
+
+    earliest_allowed_ts = now - max_lookback_seconds
+    start_ts = max(last_agent_ts, earliest_allowed_ts)
+
+    try:
+        raw_msgs = msg_store.get_by_time_range(
+            start_time=start_ts,
+            end_time=now,
+            group_id=group_id,
+            limit=max_messages + 10,
+            order="DESC",
+        )
+    except Exception as e:
+        logger.warning(f"Failed to load raw messages for interturn chatter: {e}")
+        return []
+
+    if not raw_msgs:
+        return []
+
+    raw_msgs.reverse()
+
+    lines = []
+    for m in raw_msgs:
+        mid = str(m.get("message_id") or "")
+        if current_msg_id and mid == current_msg_id:
+            continue
+
+        txt = (m.get("text") or "").strip()
+        imgs = m.get("imgs_json")
+        if isinstance(imgs, str):
+            try:
+                imgs = json.loads(imgs)
+            except Exception:
+                imgs = []
+        elif not isinstance(imgs, list):
+            imgs = []
+
+        if imgs and not txt:
+            txt = "[发送了图片]"
+        elif imgs and txt:
+            txt = f"{txt} [附图]"
+
+        if not txt:
+            continue
+
+        single_line = " ".join(txt.split())
+        if len(single_line) > 80:
+            single_line = single_line[:77] + "..."
+
+        sender = m.get("user_name") or m.get("user_id") or "群友"
+        ts = m.get("timestamp") or 0.0
+        time_str = datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else ""
+
+        prefix = f"[{time_str}] " if time_str else ""
+        mid_tag = f"[msg_id: {mid}] " if mid else ""
+        lines.append(f"{prefix}{mid_tag}{sender}: {single_line}")
+
+    if not lines:
+        return []
+
+    if len(lines) > max_messages:
+        lines = lines[-max_messages:]
+
+    return lines
 
 
 def trim_memory_blocks(blocks: list[tuple[int, str]], budget_chars: int = 6000) -> list[str]:

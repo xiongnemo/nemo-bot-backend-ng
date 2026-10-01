@@ -13,7 +13,7 @@ T0 = 1_700_000_000.0  # fixed base timestamp
 
 class StoreTestBase(unittest.TestCase):
     def setUp(self):
-        self.path = "data/test_affinity_profile.sqlite"
+        self.path = f"data/test_affinity_profile_{self._testMethodName}.sqlite"
         self._cleanup()
         self.db = Database(self.path)
         self.state_store = StateStore(self.db)
@@ -22,6 +22,8 @@ class StoreTestBase(unittest.TestCase):
         self._cleanup()
 
     def _cleanup(self):
+        if hasattr(self, "db"):
+            self.db.close()
         for ext in ["", "-shm", "-wal"]:
             p = self.path + ext
             if os.path.exists(p):
@@ -34,8 +36,8 @@ class StoreTestBase(unittest.TestCase):
 class TestAffinityStoreV2(StoreTestBase):
     def setUp(self):
         super().setUp()
-        # disable random crit so exact-gain assertions are deterministic
-        self.state_store.set_plugin_config("affinity", {"crit_chance": 0.0})
+        # disable random crit so exact-gain assertions are deterministic; fix half_life_days to default 45
+        self.state_store.set_plugin_config("affinity", {"crit_chance": 0.0, "half_life_days": 45.0})
         self.store = AffinityStore(self.state_store)
 
     def test_fresh_start_from_zero(self):

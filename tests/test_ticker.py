@@ -6,45 +6,51 @@ from core.recording_message import RecordingMessage
 
 class TestTickerPlugin(unittest.TestCase):
     def test_parse_args_defaults(self):
-        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all = parse_args("BTC")
+        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all, user_timeframes = parse_args("BTC")
         self.assertEqual(base, "BTC")
         self.assertIsNone(quote)
         self.assertEqual(exchange, "binance")
         self.assertIsNone(market)
         self.assertFalse(explicit_exchange)
         self.assertFalse(query_all)
+        self.assertFalse(user_timeframes)
 
     def test_parse_args_all_flags(self):
         for flag in ["-a", "-A", "--all", "--ALL", "all", "ALL", "全", "全网", "全平台"]:
-            base, quote, exchange, market, symbol_raw, explicit_exchange, query_all = parse_args(f"BTC {flag}")
+            base, quote, exchange, market, symbol_raw, explicit_exchange, query_all, user_timeframes = parse_args(f"BTC {flag}")
             self.assertEqual(base, "BTC")
             self.assertFalse(explicit_exchange)
             self.assertTrue(query_all, f"Flag {flag} should trigger query_all")
+            self.assertFalse(user_timeframes)
 
         # Leading flag
-        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all = parse_args("-a ETH")
+        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all, user_timeframes = parse_args("-a ETH")
         self.assertEqual(base, "ETH")
         self.assertTrue(query_all)
+        self.assertFalse(user_timeframes)
 
     def test_parse_args_explicit_exchange(self):
-        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all = parse_args("BTC okx")
+        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all, user_timeframes = parse_args("BTC okx")
         self.assertEqual(base, "BTC")
         self.assertEqual(exchange, "okx")
         self.assertTrue(explicit_exchange)
         self.assertFalse(query_all)
+        self.assertFalse(user_timeframes)
 
-        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all = parse_args("ETH hl spot")
+        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all, user_timeframes = parse_args("ETH hl spot")
         self.assertEqual(base, "ETH")
         self.assertEqual(exchange, "hyperliquid")
         self.assertEqual(market, "spot")
         self.assertTrue(explicit_exchange)
         self.assertFalse(query_all)
+        self.assertFalse(user_timeframes)
 
     def test_parse_args_pairs(self):
-        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all = parse_args("ETH/BTC")
+        base, quote, exchange, market, symbol_raw, explicit_exchange, query_all, user_timeframes = parse_args("ETH/BTC")
         self.assertEqual(base, "ETH")
         self.assertEqual(quote, "BTC")
         self.assertEqual(symbol_raw, "ETH/BTC")
+        self.assertFalse(user_timeframes)
 
     @patch("plugins.ticker.fetch_binance")
     @patch("plugins.ticker.fetch_gate")

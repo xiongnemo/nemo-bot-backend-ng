@@ -29,12 +29,11 @@ logger = logging.getLogger(__name__)
 def _init_plugin_worker():
     """Called once per worker process on startup — preloads all plugins."""
     try:
-        import plugins  # noqa: F401
-        for name in plugins.plugin_names:
-            importlib.import_module(f"plugins.{name}")
+        from plugins import get_loaded_plugins
+        loaded = get_loaded_plugins()
         logger.info(
             "Worker %s: preloaded %d plugins",
-            os.getpid(), len(plugins.plugin_names),
+            os.getpid(), len(loaded),
         )
     except Exception:
         logger.error("Worker init failed:\n%s", traceback.format_exc())
@@ -60,7 +59,27 @@ def _run_plugin_in_worker(
 
     msg = RecordingMessage(message_dict)
     msg.request.command = plugin_name
-    mod = importlib.import_module(f"plugins.{plugin_name}")
+    try:
+        mod = importlib.import_module(f"plugins.{plugin_name}")
+    except (ModuleNotFoundError, ImportError) as e:
+        missing_mod = getattr(e, "name", None) or str(e)
+        logger.error("!!!!!! %s 插件似乎缺少 %s module !!!!!!", plugin_name, missing_mod, exc_info=True)
+        return {
+            "ok": False,
+            "actions": [],
+            "payload": None,
+            "error": f"Missing module: {missing_mod}",
+            "config": plugin_config,
+        }
+    except Exception as e:
+        logger.error("!!!!!! %s 插件导入失败 !!!!!!", plugin_name, exc_info=True)
+        return {
+            "ok": False,
+            "actions": [],
+            "payload": None,
+            "error": str(e),
+            "config": plugin_config,
+        }
 
     # Smart hot-reloading based on mtime and sha1
     try:

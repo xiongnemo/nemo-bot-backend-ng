@@ -128,6 +128,8 @@ def setup():
         bot_names=agent_cfg.get("bot_names", ["nemo"]),
         trigger_prefixes=agent_cfg.get("trigger_prefixes", ["nemonemo"]),
     )
+    context.ruleset = ruleset
+    context.router = router
 
     # 5. Scheduler
     scheduler = SchedulerEngine(db, sender, state_store)
@@ -146,7 +148,9 @@ def setup():
     register_superuser_tools(tool_registry, state_store)
 
     tool_registry.load_defaults()
+    context.tool_registry = tool_registry
     tool_executor = ToolExecutor(tool_registry, executor, state_store, sender, scheduler)
+    context.tool_executor = tool_executor
     
     from nemollm.memory import ConversationMemory
     mem = ConversationMemory(conv_store)
@@ -272,24 +276,21 @@ def reload_backend():
     new_ruleset.load_defaults()
     router.ruleset = new_ruleset
     ruleset = new_ruleset
+    context.ruleset = new_ruleset
 
     persona_cnt = context.persona_store.reload() if getattr(context, "persona_store", None) else 0
+    tools_cnt = 0
     if getattr(context, "tool_registry", None):
-        import importlib
-        import agent.builtin_tools
-        importlib.reload(agent.builtin_tools)
-        agent.builtin_tools.register_builtin_tools(
-            context.tool_registry,
-            context.message_store,
-            context.state_store,
-            getattr(context, "scheduler", None)
-        )
-    logger.info("Hot-reloaded %d routing rules, %d personas, and tools via /api/reload", len(ruleset.rules), persona_cnt)
+        if hasattr(context.tool_registry, "reload_plugins"):
+            tools_cnt = context.tool_registry.reload_plugins()
+        else:
+            tools_cnt = len(context.tool_registry.get_all_definitions())
+    logger.info("Hot-reloaded %d routing rules, %d personas, and %d tools via /api/reload", len(ruleset.rules), persona_cnt, tools_cnt)
     return jsonify({
         "status": "ok",
         "rules_count": len(ruleset.rules),
         "personas_count": persona_cnt,
-        "tools_count": len(context.tool_registry.get_all_definitions()) if getattr(context, "tool_registry", None) else 0
+        "tools_count": tools_cnt,
     })
 
 
@@ -384,8 +385,7 @@ def inline_eval():
 def get_telegram_commands_list() -> list[dict]:
     """Scan all enabled plugins and generate a list of Telegram-compatible commands."""
     import re
-    import importlib
-    from plugins import plugin_names
+    from plugins import get_loaded_plugins
 
     results = []
     seen = set()
@@ -405,9 +405,9 @@ def get_telegram_commands_list() -> list[dict]:
             return desc.strip().split("\n")[0][:100]
         return "实用工具"
 
-    for mod_name in plugin_names:
+    loaded_plugins = get_loaded_plugins()
+    for mod_name, mod in loaded_plugins.items():
         try:
-            mod = importlib.import_module(f"plugins.{mod_name}")
             if getattr(mod, "_enabled", True) is False:
                 continue
             # Skip hidden/private plugins (e.g. ctj) from public Telegram menu tips
@@ -667,18 +667,17 @@ def _execute_command(msg, route):
 
 
 def _handle_man(payload: dict, route):
-    import importlib
-    from plugins import plugin_names
-    
+    from plugins import get_loaded_plugins
+
+    loaded_plugins = get_loaded_plugins()
     args = getattr(route, "args", "").strip()
     msg = IngestMessage.from_dict(payload)
     reply_text = ""
-    
+
     if not args:
         reply_text = "nemo-bot 操作手册实用程序。\n以下是 [该插件所有可能的指令] 和 [该插件简介] 。\n"
-        for module_name in plugin_names:
+        for module_name, mod in loaded_plugins.items():
             try:
-                mod = importlib.import_module(f"plugins.{module_name}")
                 cmds = getattr(mod, "_command", [])
                 name = getattr(mod, "_name", module_name)
                 if cmds:
@@ -688,11 +687,11 @@ def _handle_man(payload: dict, route):
         reply_text += "使用 man [该插件可能的指令] 来查看对应插件的操作手册。"
     else:
         found_mod = None
-        for module_name in plugin_names:
+        args_lower = args.lower()
+        for module_name, mod in loaded_plugins.items():
             try:
-                mod = importlib.import_module(f"plugins.{module_name}")
                 cmds = getattr(mod, "_command", [])
-                if args in cmds:
+                if args_lower in [c.lower() for c in cmds] or args_lower == module_name.lower():
                     found_mod = mod
                     break
             except Exception:
@@ -701,9 +700,11 @@ def _handle_man(payload: dict, route):
             name = getattr(found_mod, "_name", args)
             man_text = getattr(found_mod, "_man", "该指令未提供手册。")
             reply_text = f"nemo-bot 操作手册实用程序。\n{name}\n{man_text}"
+            logger.info("[Man] Found manual for %r: plugin %s (%s)", args, getattr(found_mod, "__name__", ""), name)
         else:
-            reply_text = "未找到该指令对应的手册，可以使用 EXPLAIN 指令来进行诊断。"
-            
+            reply_text = f"未找到指令 '{args}' 对应的手册，可以使用 EXPLAIN 指令来进行诊断。"
+            logger.info("[Man] No manual found for %r", args)
+
     from core.types import Action
     sender.deliver_actions(payload, [Action(kind="reply", text=reply_text)])
 

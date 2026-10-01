@@ -64,28 +64,21 @@ class Ruleset:
 
     def load_defaults(self):
         """Populate standard plugins and auto-discover _command prefixes."""
-        import importlib
-        from plugins import plugin_names
-
         import sys
-        
+        from plugins import get_loaded_plugins
+
         # 1. Superuser / Management commands (priority over auto-discovered)
         self.add_prefix("sudo ", "nemo")
-        
+
         registered_commands = {"sudo"}
-        
-        # 2. Auto-discover from plugins
-        for module_name in plugin_names:
-            try:
-                mod = importlib.import_module(f"plugins.{module_name}")
-            except Exception:
-                logger.warning("Failed to import plugin module: %s", module_name, exc_info=True)
-                continue
-                
+
+        # 2. Auto-discover from centrally loaded plugins
+        loaded_plugins = get_loaded_plugins()
+        for module_name, mod in loaded_plugins.items():
             # Strict validation for required attributes
             required_attrs = ["_name", "_command", "bot_execute"]
             missing = [attr for attr in required_attrs if not hasattr(mod, attr)]
-            
+
             # Require either _man (for CLI) or _tool_description (for Agent internal tools)
             if not hasattr(mod, "_man") and not hasattr(mod, "_tool_description"):
                 missing.append("_man or _tool_description")
@@ -93,22 +86,30 @@ class Ruleset:
             if missing:
                 logger.error("FATAL: Plugin '%s' is missing required attributes: %s. Exiting.", module_name, missing)
                 sys.exit(1)
-                
+
             cmds = getattr(mod, "_command")
             if not cmds:
                 logger.warning("Plugin '%s' has an empty _command list. It cannot be triggered via command mode.", module_name)
                 continue
-                
+
             if isinstance(cmds, list):
                 for cmd in cmds:
                     if cmd in registered_commands:
                         logger.error("FATAL: Duplicate command '%s' found in plugin '%s'. Exiting.", cmd, module_name)
                         sys.exit(1)
                     registered_commands.add(cmd)
-                    
+
                     # Add rule with space first (so it strips the space from args)
                     self.add_prefix(f"{cmd} ", module_name, strip=True)
                     # Fallback rule without space
                     self.add_prefix(cmd, module_name, strip=False)
 
         logger.info("Loaded %d routing rules", len(self.rules))
+
+    def reload(self) -> int:
+        """Clear existing rules, re-scan plugins directory, and reload routing rules."""
+        from plugins import get_loaded_plugins
+        get_loaded_plugins(reload=True)
+        self.rules = []
+        self.load_defaults()
+        return len(self.rules)

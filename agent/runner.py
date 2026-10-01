@@ -30,7 +30,6 @@ AFFINITY_WRITE_TOOLS = {"adjust_affinity", "gift_affinity", "admin_affinity"}
 
 SINGLE_TURN_TOOL_LIMITS = {
     "adjust_affinity": (1, "错误：在一轮对话中好感度微调工具只能调用一次，请勿重复调用！请停止工具调用并输出最终回复。"),
-    "send_message": (1, "错误：本轮对话已经通过 send_message 发送过消息，请勿重复发送！请停止工具调用，直接在文本中给出最终回复。"),
 }
 
 
@@ -287,6 +286,7 @@ class AgentRunner:
         
         # Track tool execution counts per turn for rate-limiting dangerous/duplicate tools
         turn_tool_counts: dict[str, int] = {}
+        turn_sent_recipients: dict[str, str] = {}
         import threading
         turn_lock = threading.Lock()
         
@@ -367,6 +367,66 @@ class AgentRunner:
                 
                 def execute_single_tool(tc):
                     t_name = tc.name
+
+                    # Granular per-person rate limiting for send_message:
+                    # In a single turn, at most 1 message can be sent to each person who appeared.
+                    if t_name == "send_message":
+                        args = tc.arguments
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except Exception:
+                                args = {}
+                        elif not isinstance(args, dict):
+                            args = {}
+
+                        target_mid = str(args.get("message_id") or args.get("target_id") or "").strip()
+                        recipient_id = ""
+                        recipient_name = ""
+
+                        if target_mid:
+                            try:
+                                from runtime import context as rt_context
+                                if getattr(rt_context, "msg_store", None) is not None:
+                                    target_msg = rt_context.msg_store.get_by_message_id(target_mid)
+                                    if target_msg:
+                                        recipient_id = str(target_msg.get("user_id") or target_mid)
+                                        recipient_name = str(target_msg.get("user_name") or recipient_id)
+                            except Exception:
+                                pass
+                            if not recipient_id:
+                                recipient_id = f"mid:{target_mid}"
+                                recipient_name = f"消息ID {target_mid} 的发送者"
+                        else:
+                            recipient_id = str(message.context.user_id)
+                            recipient_name = str(message.context.user_name or recipient_id)
+
+                        with turn_lock:
+                            if recipient_id in turn_sent_recipients:
+                                logger.warning(
+                                    "Tool send_message to %s (%s) exceeded per-person limit (1 per turn). Intercepted.",
+                                    recipient_name, recipient_id,
+                                )
+                                return ChatMessage(
+                                    role="tool",
+                                    content=json.dumps({
+                                        "error": f"错误：本轮对话中你已经向 {recipient_name} 发送过一条消息了！对话中出现的每个人每轮最多只能发送一条消息，请勿重复发送！请停止对其发送，直接给出最终回复。"
+                                    }, ensure_ascii=False),
+                                    tool_call_id=tc.id,
+                                    name=t_name,
+                                )
+                            if len(turn_sent_recipients) >= 5:
+                                logger.warning("Tool send_message exceeded max distinct recipients limit (5). Intercepted.")
+                                return ChatMessage(
+                                    role="tool",
+                                    content=json.dumps({
+                                        "error": "错误：本轮对话中已向 5 位不同的群友发送过顺带回复，达到单轮上限！请停止发送，直接在文本中给出最终回复。"
+                                    }, ensure_ascii=False),
+                                    tool_call_id=tc.id,
+                                    name=t_name,
+                                )
+                            turn_sent_recipients[recipient_id] = recipient_name
+
                     limit_info = SINGLE_TURN_TOOL_LIMITS.get(t_name)
                     if limit_info:
                         max_cnt, err_msg = limit_info

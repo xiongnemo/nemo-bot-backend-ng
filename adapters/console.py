@@ -14,16 +14,21 @@ CLIENT_ENDPOINT = console_cfg.get("endpoint", "http://127.0.0.1:42165/receive")
 
 def _send_to_client(context: MessageContext, content: str, reply: bool, photo_url: str = None):
     prefix = f"[Nemo -> {context.user_name or context.user_id}]:" if reply else "[Nemo]:"
-    
+
+    msg_str = content or ""
+    if photo_url:
+        msg_str = f"{msg_str}\n[图片: {photo_url}]" if msg_str else f"[图片: {photo_url}]"
+
     payload = {
-        "text": f"\n{prefix}\n{content}\n",
+        "text": f"\n{prefix}\n{msg_str}\n",
         "message_id": getattr(context, 'message_id', None),
-        "photo_url": photo_url
+        "photo_url": str(photo_url) if photo_url else None
     }
     try:
         requests.post(CLIENT_ENDPOINT, json=payload, timeout=2)
     except Exception:
         # If client isn't listening, just fallback to server stdout
+        pass
     logger.info(payload["text"])
 
 def send_msg(

@@ -21,6 +21,7 @@ dependencies = [
     "emoji>=2.0",
     "pyzmq>=25.0",
     "rocksdict>=0.3",
+    "websocket-client>=1.8.0",
 ]
 
 [dependency-groups]

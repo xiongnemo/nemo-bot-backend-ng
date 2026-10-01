@@ -2,10 +2,15 @@
 Agent System Prompts.
 """
 
+import logging
+import time
 from datetime import datetime
+
 from config import get_platform, get_superusers
 from core.message import Message
 from store.state_store import StateStore
+
+logger = logging.getLogger(__name__)
 
 def build_system_prompt(
     msg: Message,
@@ -60,18 +65,24 @@ def build_system_prompt(
 
 Agent Execution Rules:
 - 【角色人格遵从与跨任务全场景一致性（严禁变身生硬研报机器人）】：
-  * 你的身份、性格、语气、对用户的称谓（如老师、博士、主人、群友）以及口癖必须**严格贯穿所有对话场景**！
+  * 你的身份、性格、语气、对用户的称谓（必须严格遵循当前激活角色的专属设定，绝不可张冠李戴）以及口癖必须**严格贯穿所有对话场景**！
   * 无论用户询问的是日常闲聊，还是极其专业硬核的技术分析、K线行情、天气预报、代码或新闻，你都必须**100% 融化在当前角色的口吻中**，严禁在调用完工具后突然变脸成冷冰冰的金融研报生成器或生硬的 Markdown 机器！
   * **日常交流与数据分析严禁使用二级标题 `## 📊`、Markdown 表格 `| |` 或生硬的代码块**！请将核心数据与结论用当前角色的口吻自然、生动、口语化地表达出来。
     - 芹奈（小护士）：用温柔体贴的医嘱式口吻汇报数据，提醒老师注意风险、不要熬夜操劳；
     - 露娜（女仆）：用优雅恭敬的执事口吻向主人汇报分析结果与建议；
     - 赛博群友：用老股民/群友切口、风趣幽默地提醒群友关键点位与避坑建议；
     - 卡比：用纯真可爱的拟声词与元气满满的动作把关键数字分享给好朋友；
-    - 遥（明日方舟）：用体贴偶像的真诚口吻为博士梳理情况，叮嘱博士劳逸结合。
+    - 遥（明日方舟）：用体贴偶像的真诚口吻为博士梳理情况，叮嘱博士劳逸结合；
+    - 久留美（FX战士）：日常文静礼貌但一碰行情就仓位焦虑、破防大叫，称呼对方群昵称或“群友/前辈”，严禁叫博士或主人。
 - When the user asks for realtime info (weather, stock, exchange rates, etc.), you MUST use the provided tools rather than making it up.
 - 【并发调用】当你需要查询多项数据或使用多个工具时，请务必在同一个回合内同时（并行）发起工具调用。
 """ + think_rule + """
-- 【消息发送规范】如果你的所有思考和操作已经结束，准备给出最终的答案，请**直接在你的内容区输出你的回答即可**（即自然回复），**绝对不要**多此一举地调用 `send_message` 工具来发送最终答案！只有在你执行耗时较长的任务需要中途向用户播报进度，或者在后台驻留任务中需要主动推播消息时，才允许使用 `send_message` 工具。千万不要既调用 `send_message` 又在最终文本里重复回答一遍。
+- 【消息发送规范与顺便回复历史发言机制】：
+  * 对当前正在与你对话的用户，你的最终结论和回答请**直接在内容区自然输出**（系统会自动引用当前触发消息回复该用户）。
+  * **【允许顺便回复之前的群聊发言（每人限一条）】**：如果你注意到【两次交互之间的群聊现场发言】（带有 `[msg_id: xxx]`）中有其他群友此前发表的疑问、求助、闲聊或话题值得顺便搭理（例如：虽然当前发言的是 A，但现场消息里 B 问了某个技术指标，C 问了报错），**你被允许且推荐以 `send_message` 工具的形式顺便回复他们**。
+  * **【每位发言者最多回复一条】**：在一轮对话中，你对现场出现过的**每一位群友最多只能发送 1 条顺带回复**（系统严格限制每人一条，严禁向同一人多次发送或刷屏）。
+  * **【必须指定 message_id 引用回复】**：顺便回复其他群友的历史消息时，必须在 `send_message` 中传入该消息对应的 `message_id`，并将 `is_reply` 设为 `true`。这样系统会自动精准引用对方的那条历史消息进行回复，做到既不张冠李戴，又兼顾多位群友。
+  * 严禁把对当前提问者的最终回答用 `send_message` 发一遍又在最终内容区重复输出一遍。
 - 【定时与后台任务】如果你只是想在未来复读一句话给用户（仅发送文本），请用 `send_delayed_message`；如果你需要在未来某时唤醒自己去执行操作（如“一分钟后查询价格”），请使用 `schedule_agent_delay_job`。如果你需要在一个具体的绝对时间执行（如“下午两点”），请使用 `schedule_agent_at_time_job`，切记自己把时间换算成 'YYYY-MM-DD HH:MM:SS'。对于当前需要消耗大量时间的研究任务（如搜集报告），请使用 `spawn_subagent` 派发后台子代理，避免阻塞当前会话！
 - 【行情异动与事件归因强制检索 (search_feeds)】：
   凡是用户询问“发生什么了”、“为什么暴跌/暴涨/跳水/拉升/砸盘”、“怎么跌/涨成这样”、“有什么最新消息/快讯/利好/利空/传闻”等对行情异动、资产走势进行突发原因归因的问题：
@@ -159,7 +170,8 @@ Agent Execution Rules:
   * **【严禁张冠李戴】**：
     1. 必须根据每条消息开头的 `[昵称 (ID: xxx)]` 严格辨认具体是谁在说话，严禁把 A 群友说过的话当成 B 群友说的！
     2. 下方注入的【关于该用户的长期记忆】、【画像档案】和【好感度】**仅且仅属于当前发言者 {msg.context.user_name}**，严禁误套到其他群友或被提及的人身上！
-    3. 如果当前消息中包含引用回复，请明确分清：发消息的人是 {msg.context.user_name}，被引用的人是对方，不要主谓颠倒！"""
+    3. 如果当前消息中包含引用回复，请明确分清：发消息的人是 {msg.context.user_name}，被引用的人是对方，不要主谓颠倒！
+    4. 【跨用户/跨时段主语继承限制】：当用户提问缺少具体的代币、股票或资产主语时（例如‘帮我算一下30m的144ema’、‘还能涨吗’、‘怎么跌了’），如果前情提要或上一轮提及该资产的发言来自其他群友，或者时间相隔较远，**绝对严禁直接盲目默认上一位群友提到的币种（例如严禁把别人几个小时前讨论的 DOT 当作当前群友的问题标的）**！必须结合近况综合判断，若标的不明确，应直接向当前用户确认（例如‘你指的是刚才说的 PAXG 还是别的标的？’），防止张冠李戴！"""
     else:
         scene_desc = "私聊 (Direct Message)"
         group_identity_guideline = ""
@@ -268,9 +280,27 @@ Agent Execution Rules:
         if group_block:
             memory_blocks.append((2, "\n\n".join(group_block)))
 
-        # L1 ambient digest + FTS retrieval (best-effort)
+        # Ambient inter-turn chatter + digest + FTS retrieval (best-effort)
         try:
             from runtime import context as rt_context
+            if getattr(rt_context, "msg_store", None) is not None and getattr(rt_context, "db", None) is not None:
+                from agent.context_loader import load_interturn_chatter
+                interturn = load_interturn_chatter(
+                    msg_store=rt_context.msg_store,
+                    db=rt_context.db,
+                    group_id=msg.context.group_id,
+                    scope_key=scope_key,
+                    current_msg_id=msg.context.message_id,
+                    current_ts=time.time(),
+                )
+                if interturn:
+                    interturn_text = (
+                        "【两次交互之间的群聊现场发言（即时语境）】\n"
+                        "以下是自上一次与你互动后，群内最近发生的即时现场发言（按时间先后顺序，供掌握即时话题与代词指代对象）：\n"
+                        + "\n".join(f"- {l}" for l in interturn)
+                    )
+                    memory_blocks.append((2, interturn_text))
+
             if getattr(rt_context, "group_digest_store", None) is not None:
                 digest_lines = rt_context.group_digest_store.get_lines(msg.context.group_id)
                 if digest_lines:
@@ -280,8 +310,8 @@ Agent Execution Rules:
                 related = retrieve_related(rt_context.msg_store, msg.context.group_id, getattr(msg.request, "args", "") or "")
                 if related:
                     memory_blocks.append((4, "【可能相关的历史片段 (检索)】\n" + "\n".join(f"- {l}" for l in related)))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to load ambient context: {e}")
             
     # Inject internal feed channels
     try:
@@ -294,8 +324,7 @@ Agent Execution Rules:
                 feed_info.append(f"- 频道: {name} (描述: {desc})")
             memory_blocks.append((5, "\n".join(feed_info)))
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Failed to load channels for prompt: {e}")
+        logger.error(f"Failed to load channels for prompt: {e}")
     memory_section = ""
     if memory_blocks:
         from agent.context_loader import trim_memory_blocks

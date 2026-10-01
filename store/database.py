@@ -43,6 +43,16 @@ class Database:
             self._local.conn = conn
         return conn
 
+    def close(self):
+        """Close the thread-local SQLite connection if open."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
+
     # ------------------------------------------------------------------
     # Migrations
     # ------------------------------------------------------------------
