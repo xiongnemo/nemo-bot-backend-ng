@@ -127,6 +127,47 @@ class TestSysReloadPlugin(unittest.TestCase):
             )
             self.assertTrue(format_found, "Expected log message formatted with '!!!!!! xxx 插件似乎缺少 yyy module !!!!!!'")
 
+    def test_main_process_only_flag(self):
+        import plugins.sys_reload as sys_reload
+        import plugins.sys_maintenance as sys_maintenance
+        import plugins.sys_persona as sys_persona
+
+        self.assertTrue(getattr(sys_reload, "_main_process_only", False))
+        self.assertTrue(getattr(sys_maintenance, "_main_process_only", False))
+        self.assertTrue(getattr(sys_persona, "_main_process_only", False))
+
+    def test_executor_main_process_routing(self):
+        from runtime.executor import Executor
+        executor = Executor(plugin_workers=1, dispatch_workers=1)
+        try:
+            self.assertTrue(executor._is_main_process_only("sys_reload"))
+            self.assertTrue(executor._is_main_process_only("sys_maintenance"))
+            self.assertTrue(executor._is_main_process_only("sys_persona"))
+            self.assertFalse(executor._is_main_process_only("weather"))
+
+            # Test run_plugin_sync routes directly without submitting to plugin_pool
+            with patch.object(executor, "submit_plugin") as mock_submit, \
+                 patch("runtime.executor._run_plugin_in_worker") as mock_run_in_worker:
+                mock_run_in_worker.return_value = {"ok": True, "actions": [], "payload": None, "error": "", "config": {}}
+                
+                # Main process only plugin: runs directly in thread
+                res = executor.run_plugin_sync({}, "sys_reload", {})
+                self.assertTrue(res["ok"])
+                mock_submit.assert_not_called()
+                mock_run_in_worker.assert_called_once_with({}, "sys_reload", {})
+
+            # Non-main process plugin: submits to process pool
+            with patch.object(executor, "submit_plugin") as mock_submit:
+                mock_future = MagicMock()
+                mock_future.result.return_value = {"ok": True, "actions": []}
+                mock_submit.return_value = mock_future
+                res = executor.run_plugin_sync({}, "weather", {})
+                self.assertTrue(res["ok"])
+                mock_submit.assert_called_once_with({}, "weather", {})
+        finally:
+            executor.shutdown(wait=False)
+
 
 if __name__ == "__main__":
     unittest.main()
+

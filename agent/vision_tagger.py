@@ -56,6 +56,12 @@ def async_tag_images(urls: list[str], message_id: str, state_store):
     if not urls:
         return
 
+    from runtime import context
+    sys_ctrl = getattr(context, "system_control", None)
+    if sys_ctrl and not sys_ctrl.is_tagging_enabled():
+        logger.info("[VisionTagger] Background image tagging is disabled by system_control. Silently skipping.")
+        return
+
     llm_cfg = backend_config.get("llm", {})
     vision_model_str = llm_cfg.get("vision_model")
     if not vision_model_str:

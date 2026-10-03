@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import sys
 import traceback
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 
@@ -29,6 +30,17 @@ logger = logging.getLogger(__name__)
 def _init_plugin_worker():
     """Called once per worker process on startup — preloads all plugins."""
     try:
+        from store.database import Database
+        from store.state_store import StateStore
+        from store.system_control import SystemControl
+        from runtime import context
+
+        db = Database()
+        state_store = StateStore(db)
+        context.db = db
+        context.state_store = state_store
+        context.system_control = SystemControl(state_store)
+
         from plugins import get_loaded_plugins
         loaded = get_loaded_plugins()
         logger.info(
@@ -152,13 +164,30 @@ class Executor:
     # Plugin execution (process pool)
     # ------------------------------------------------------------------
 
+    def _is_main_process_only(self, plugin_name: str) -> bool:
+        """Check if a plugin requires execution in the main process (e.g. system management)."""
+        try:
+            from plugins import get_loaded_plugins
+            mod = get_loaded_plugins().get(plugin_name)
+            if mod is None and f"plugins.{plugin_name}" in sys.modules:
+                mod = sys.modules[f"plugins.{plugin_name}"]
+            if mod is None:
+                mod = importlib.import_module(f"plugins.{plugin_name}")
+            return bool(getattr(mod, "_main_process_only", False))
+        except Exception:
+            return False
+
     def submit_plugin(
         self,
         message_dict: dict,
         plugin_name: str,
         plugin_config: dict,
     ) -> Future:
-        """Non-blocking: submit a plugin job to the process pool."""
+        """Non-blocking: submit a plugin job to the process pool (or dispatch pool if main-process only)."""
+        if self._is_main_process_only(plugin_name):
+            return self.dispatch_pool.submit(
+                _run_plugin_in_worker, message_dict, plugin_name, plugin_config,
+            )
         return self.plugin_pool.submit(
             _run_plugin_in_worker, message_dict, plugin_name, plugin_config,
         )
@@ -172,9 +201,15 @@ class Executor:
     ) -> dict:
         """
         Blocking: execute a plugin and wait for the result.
-        Used by the agent tool executor (runs in a dispatch thread,
-        blocks until the plugin worker finishes).
+        Used by the agent tool executor and command dispatcher.
+
+        If the plugin specifies `_main_process_only = True`, it is executed
+        directly in the current thread (main process) rather than dispatched
+        across process boundaries, preserving singleton access (ruleset, tool_registry, etc.).
         """
+        if self._is_main_process_only(plugin_name):
+            return _run_plugin_in_worker(message_dict, plugin_name, plugin_config)
+
         future = self.submit_plugin(message_dict, plugin_name, plugin_config)
         return future.result(timeout=timeout)
 

@@ -18,6 +18,7 @@ from nemollm.registry import init_registry
 from routing import Router, Ruleset
 from runtime.executor import Executor
 from runtime.sender import Sender
+from runtime import context
 from store.database import Database
 from store.conversation_store import ConversationStore
 from store.message_store import MessageStore
@@ -34,6 +35,18 @@ import config as app_config
 
 # Create logs directory if it doesn't exist
 os.makedirs("logs", exist_ok=True)
+
+# Configure stdout / stderr for UTF-8 safety on Windows consoles
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,11 +77,12 @@ tool_registry: ToolRegistry = None
 tool_executor: ToolExecutor = None
 agent_runner: AgentRunner = None
 scheduler: SchedulerEngine = None
+system_control: Any = None
 
 
 def setup():
     global db, state_store, msg_store, conv_store, executor, sender, feed_service
-    global ruleset, router, tool_registry, tool_executor, agent_runner, scheduler
+    global ruleset, router, tool_registry, tool_executor, agent_runner, scheduler, system_control
     
     logger.info("Initializing nemo-bot-backend-ng...")
 
@@ -112,6 +126,10 @@ def setup():
     from store.file_store import FileStore
     context.file_store = FileStore(db)
 
+    from store.system_control import SystemControl
+    system_control = SystemControl(state_store)
+    context.system_control = system_control
+
     # 3. LLM
     init_registry(app_config.backend_config.get("llm", {}))
 
@@ -133,6 +151,7 @@ def setup():
 
     # 5. Scheduler
     scheduler = SchedulerEngine(db, sender, state_store)
+    context.scheduler = scheduler
 
     # 6. Tools
     from agent.tool_registry import ToolRegistry
@@ -471,8 +490,12 @@ def _handle_ingest(payload: dict):
         )
 
         if msg.imgs:
-            from agent.vision_tagger import async_tag_images
-            executor.submit_dispatch(async_tag_images, msg.imgs, msg.message_id, state_store)
+            sys_ctrl = getattr(context, "system_control", None)
+            if sys_ctrl is None or sys_ctrl.is_tagging_enabled():
+                from agent.vision_tagger import async_tag_images
+                executor.submit_dispatch(async_tag_images, msg.imgs, msg.message_id, state_store)
+            else:
+                logger.info("[VisionTagger] Background image tagging skipped (disabled by system_control)")
 
         # --- Alias Interception Start ---
         first_word = msg.full_text.split()[0] if msg.full_text.strip() else ""
@@ -615,6 +638,18 @@ def _handle_ingest(payload: dict):
         if route.mode == "command":
             _execute_command(raw_msg, route)
         elif route.mode == "agent":
+            sys_ctrl = getattr(context, "system_control", None)
+            if sys_ctrl and not sys_ctrl.is_agent_chat_enabled():
+                if not sys_ctrl.is_group_whitelisted(msg.group_id):
+                    reason = sys_ctrl.get_maintenance_reason()
+                    logger.info(
+                        "[SystemControl] Chat Agent disabled. Explicit invocation from %s (group: %s) intercepted. Replying reason: %s",
+                        msg.user_id, msg.group_id or "DM", reason
+                    )
+                    from core.types import Action
+                    sender.deliver_actions(payload, [Action(kind="reply", text=reason)])
+                    return
+
             run_id = uuid.uuid4().hex[:6]
             def observer_callback(actions):
                 sender.deliver_actions(payload, actions)

@@ -18,6 +18,7 @@ _name = "人格角色管理"
 _command = ["persona", "角色", "切换人格", "切换角色", "人设"]
 _man = "用法:\n/persona list - 查看所有角色及当前激活状态\n/persona switch <角色ID> - 切换当前会话角色\n/persona reset - 恢复当前会话为默认角色\n/persona reload - 热重载所有人格文件"
 _enabled = True
+_main_process_only = True
 
 _tool_description = "查看或切换当前群聊/私聊的人格角色设定。支持查看角色清单、一键切换到指定角色、恢复默认角色或热重载角色库。"
 _parameters = {

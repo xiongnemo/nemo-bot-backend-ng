@@ -513,6 +513,10 @@ def trigger_agent_task(frontend: str, context: dict, prompt: str, task_id: str):
     """Called by APScheduler to trigger the agent automatically."""
     try:
         from runtime import context as rt_context
+        sys_ctrl = getattr(rt_context, "system_control", None)
+        if sys_ctrl and not sys_ctrl.is_jobs_enabled():
+            logger.info("[Scheduler] trigger_agent_task %s skipped (disabled by system_control).", task_id)
+            return
         agent_runner = rt_context.agent_runner
         executor = rt_context.executor
         from core.message import Message

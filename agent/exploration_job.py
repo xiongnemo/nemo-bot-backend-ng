@@ -402,6 +402,12 @@ def run_exploration_job(target_bvid: str = "", topics: list[str] | None = None) 
     - If topics are passed (or configured): Search Bilibili for highest popularity videos under each topic!
     - Otherwise: Explore general trending videos.
     """
+    from runtime import context
+    sys_ctrl = getattr(context, "system_control", None)
+    if sys_ctrl and not sys_ctrl.is_jobs_enabled():
+        logger.info("[Exploration] Scheduled exploration job skipped (disabled by system_control).")
+        return {"ok": False, "msg": "定时任务已被系统维护停用 (disabled by system_control)"}
+
     effective_topics = topics
     if not target_bvid and not effective_topics:
         cfg_topics = get_all_exploration_topics()

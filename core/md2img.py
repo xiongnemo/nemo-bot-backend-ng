@@ -110,7 +110,12 @@ class MarkdownRenderer:
             except:
                 return get_current_font()
 
-        import emoji
+        try:
+            import emoji
+            has_emoji = True
+        except ImportError:
+            emoji = None
+            has_emoji = False
 
         def process_text_segment(text_content, font):
             nonlocal cursor_x, cursor_y
@@ -119,7 +124,7 @@ class MarkdownRenderer:
             parts = []
             buffer = ""
             for char in text_content:
-                if emoji.is_emoji(char):
+                if has_emoji and emoji.is_emoji(char):
                     if buffer:
                         parts.append(buffer)
                         buffer = ""
@@ -131,7 +136,7 @@ class MarkdownRenderer:
                 
             for part in parts:
                 if not part: continue
-                is_emoji = emoji.is_emoji(part)
+                is_emoji = has_emoji and emoji.is_emoji(part)
                 current_font = get_emoji_font() if is_emoji else font
                 
                 if is_emoji:
@@ -250,7 +255,7 @@ class MarkdownRenderer:
                 parts = []
                 buffer = ""
                 for char in text:
-                    if emoji.is_emoji(char):
+                    if has_emoji and emoji.is_emoji(char):
                         if buffer:
                             parts.append(buffer)
                             buffer = ""
@@ -262,7 +267,7 @@ class MarkdownRenderer:
                     
                 for part in parts:
                     if not part: continue
-                    is_emoji = emoji.is_emoji(part)
+                    is_emoji = has_emoji and emoji.is_emoji(part)
                     current_font = get_emoji_font() if is_emoji else font
                     
                     if is_emoji:

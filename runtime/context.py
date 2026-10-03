@@ -19,3 +19,5 @@ ruleset: Any = None
 router: Any = None
 tool_registry: Any = None
 tool_executor: Any = None
+system_control: Any = None
+scheduler: Any = None

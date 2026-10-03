@@ -27,6 +27,7 @@ _man = """系统组件统一热重载（仅限超级管理员）。
 _tool_description = "系统组件统一热重载工具。允许超级管理员免重启动态更新插件、路由规则、Agent 工具库及角色人格库。"
 _enabled = 1
 _superuser_only = True
+_main_process_only = True
 
 
 @generic_exception_handler

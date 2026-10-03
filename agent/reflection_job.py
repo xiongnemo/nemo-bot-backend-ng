@@ -144,6 +144,11 @@ def run_reflection_job():
     Scans the conversations table for recent activity (group chats AND direct
     messages) and reflects on them.
     """
+    from runtime.context import system_control
+    if system_control and not system_control.is_jobs_enabled():
+        logger.info("[Reflection] Scheduled reflection job skipped (disabled by system_control).")
+        return
+
     logger.info("[Reflection] Starting reflection job...")
     from runtime.context import db, state_store
 

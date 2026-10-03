@@ -19,6 +19,7 @@ import time
 import logging
 import datetime
 import concurrent.futures
+import threading
 from typing import Optional, List, Tuple, Dict, Any
 
 import numpy as np
@@ -369,6 +370,10 @@ def normalize_interval(iv_input: str) -> str:
     return INTERVAL_MAP.get(clean, clean)
 
 
+# Limit concurrent WebSocket handshakes to TradingView to prevent 429 Too Many Requests
+_TV_SEMAPHORE = threading.Semaphore(2)
+
+
 class TradingViewClient:
     """WebSocket client to fetch real-time quotes and historical candlestick data directly from TradingView."""
     WS_URL = "wss://data.tradingview.com/socket.io/websocket"
@@ -404,17 +409,14 @@ class TradingViewClient:
             idx = end
         return packets
 
-    def fetch_klines(
+    def _fetch_klines_once(
         self,
-        symbol: str,
-        interval: str = "1D",
+        resolved_sym: str,
+        tv_iv: str,
+        interval: str,
         n_bars: int = 300,
         timeout: float = 12.0
     ) -> pd.DataFrame:
-        """Fetch OHLCV candlestick series for a symbol."""
-        resolved_sym = resolve_symbol(symbol)
-        tv_iv = normalize_interval(interval)
-
         chart_session = self._generate_session_id("cs_")
         ws = create_connection(self.WS_URL, header=self.HEADERS, timeout=timeout)
 
@@ -508,9 +510,40 @@ class TradingViewClient:
             except Exception:
                 pass
 
-    def fetch_quote(self, symbol: str, timeout: float = 8.0) -> dict:
-        """Fetch real-time ticker quote."""
+    def fetch_klines(
+        self,
+        symbol: str,
+        interval: str = "1D",
+        n_bars: int = 300,
+        timeout: float = 12.0,
+        max_retries: int = 2
+    ) -> pd.DataFrame:
+        """Fetch OHLCV candlestick series for a symbol with concurrency limit and 429 backoff retry."""
         resolved_sym = resolve_symbol(symbol)
+        tv_iv = normalize_interval(interval)
+
+        last_err = None
+        for attempt in range(max_retries + 1):
+            try:
+                with _TV_SEMAPHORE:
+                    time.sleep(random.uniform(0.05, 0.15))
+                    return self._fetch_klines_once(resolved_sym, tv_iv, interval, n_bars=n_bars, timeout=timeout)
+            except Exception as e:
+                err_str = str(e)
+                last_err = e
+                is_rate_limited = "429" in err_str or "Too Many Requests" in err_str
+                is_timeout = "timeout" in err_str.lower() or "timed out" in err_str.lower()
+                if attempt < max_retries and (is_rate_limited or is_timeout):
+                    backoff = random.uniform(1.0, 2.0) * (attempt + 1)
+                    logger.warning(
+                        "TradingView klines for %s (%s) failed (%s), retrying in %.2fs (attempt %d/%d)...",
+                        resolved_sym, interval, e, backoff, attempt + 1, max_retries
+                    )
+                    time.sleep(backoff)
+                else:
+                    raise last_err
+
+    def _fetch_quote_once(self, resolved_sym: str, timeout: float = 8.0) -> dict:
         quote_session = self._generate_session_id("qs_")
         ws = create_connection(self.WS_URL, header=self.HEADERS, timeout=timeout)
 
@@ -586,6 +619,30 @@ class TradingViewClient:
                 ws.close()
             except Exception:
                 pass
+
+    def fetch_quote(self, symbol: str, timeout: float = 8.0, max_retries: int = 2) -> dict:
+        """Fetch real-time ticker quote with concurrency limit and 429 backoff retry."""
+        resolved_sym = resolve_symbol(symbol)
+        last_err = None
+        for attempt in range(max_retries + 1):
+            try:
+                with _TV_SEMAPHORE:
+                    time.sleep(random.uniform(0.05, 0.15))
+                    return self._fetch_quote_once(resolved_sym, timeout=timeout)
+            except Exception as e:
+                err_str = str(e)
+                last_err = e
+                is_rate_limited = "429" in err_str or "Too Many Requests" in err_str
+                is_timeout = "timeout" in err_str.lower() or "timed out" in err_str.lower()
+                if attempt < max_retries and (is_rate_limited or is_timeout):
+                    backoff = random.uniform(1.0, 2.0) * (attempt + 1)
+                    logger.warning(
+                        "TradingView quote for %s failed (%s), retrying in %.2fs (attempt %d/%d)...",
+                        resolved_sym, e, backoff, attempt + 1, max_retries
+                    )
+                    time.sleep(backoff)
+                else:
+                    raise last_err
 
 
 tv_client = TradingViewClient()

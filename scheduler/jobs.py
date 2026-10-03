@@ -26,7 +26,10 @@ def github_monitor_job(
     github_username: str, github_pat: str,
     target_frontend: str, target_group_id: str,
 ):
-    from runtime.context import sender, state_store
+    from runtime.context import sender, state_store, system_control
+    if system_control and not system_control.is_jobs_enabled():
+        logger.info("[Scheduler] github_monitor_job skipped (disabled by system_control).")
+        return
     state_key = f"{author}_{repo}_{branch}"
     last_sha = state_store.get("scheduler", "github_monitor", state_key, default="")
 
@@ -70,7 +73,10 @@ def github_monitor_job(
 def jinshi_job(
     target_frontend: str, target_group_id: str,
 ):
-    from runtime.context import sender, state_store
+    from runtime.context import sender, state_store, system_control
+    if system_control and not system_control.is_jobs_enabled():
+        logger.info("[Scheduler] jinshi_job skipped (disabled by system_control).")
+        return
     import time
     import tls_client
     
@@ -121,7 +127,10 @@ def gzctf_job(
     game_id: int, cookie: str,
     target_frontend: str, target_group_id: str,
 ):
-    from runtime.context import sender, state_store
+    from runtime.context import sender, state_store, system_control
+    if system_control and not system_control.is_jobs_enabled():
+        logger.info("[Scheduler] gzctf_job skipped (disabled by system_control).")
+        return
     last_id = state_store.get("scheduler", "gzctf", f"last_id_{game_id}", default=0)
     
     url = f"https://catctf.tongji.edu.cn/api/game/{game_id}/notices"
@@ -201,5 +210,8 @@ def user_notification_job(
     text: str,
     is_reply: bool,
 ):
-    from runtime.context import sender
+    from runtime.context import sender, system_control
+    if system_control and not system_control.is_jobs_enabled():
+        logger.info("[Scheduler] user_notification_job skipped (disabled by system_control).")
+        return
     sender.send_text(message_dict, text, reply=is_reply)

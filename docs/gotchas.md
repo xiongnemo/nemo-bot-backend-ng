@@ -44,3 +44,9 @@
     ```
     绝不能假定父层或运行环境已经提供了全局 `logger`。
 
+## 7. 插件多进程执行与主进程直通 (`_main_process_only`)
+- **跨进程状态修改失效**
+  - **坑点描述**：普通业务插件默认在 `ProcessPoolExecutor` 工作子进程中执行（以便隔离密集计算、崩溃防护和动态重载）。然而，系统管理类插件（如 `/reload`、`/maintenance`、`/persona reload`）需要直接修改主进程的单例（如 `context.ruleset`、`context.tool_registry`、`context.persona_store`、`context.system_control`）。如果在子进程中执行，修改只发生在子进程的内存副本中，主进程的路由、工具池与维护状态完全不受影响！
+  - **避坑准则**：任何需要读取或修改主进程内存单例状态的系统管理插件，必须在模块顶层声明 `_main_process_only = True`。`Executor` 在执行时若检测到此标记，将自动路由到主进程当前线程同步执行，直通主进程单例，避免跨进程状态隔离导致的死胡同。
+
+
