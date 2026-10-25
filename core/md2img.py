@@ -117,26 +117,43 @@ class MarkdownRenderer:
             emoji = None
             has_emoji = False
 
+        def split_text_and_emojis(text_content):
+            """
+            Split text cleanly into alternating (substring, is_emoji) tuples.
+            Uses emoji.emoji_list() to accurately match full Unicode graphemes
+            (including multi-codepoint sequences, skin tones, etc.), and strips
+            variation selector \ufe0f and zero-width joiner \u200d that cause
+            missing-glyph tofu boxes (\u25af) in FreeType / Pillow on Windows.
+            """
+            parts = []
+            if has_emoji:
+                matches = emoji.emoji_list(text_content)
+                last_idx = 0
+                for m in matches:
+                    start, end = m['match_start'], m['match_end']
+                    if start > last_idx:
+                        clean_text = text_content[last_idx:start].replace('\ufe0f', '').replace('\u200d', '').replace('➔', '→')
+                        if clean_text:
+                            parts.append((clean_text, False))
+                    e_str = m['emoji'].replace('\ufe0f', '').replace('\u200d', '')
+                    if e_str:
+                        parts.append((e_str, True))
+                    last_idx = end
+                if last_idx < len(text_content):
+                    clean_text = text_content[last_idx:].replace('\ufe0f', '').replace('\u200d', '').replace('➔', '→')
+                    if clean_text:
+                        parts.append((clean_text, False))
+            else:
+                parts.append((text_content.replace('\ufe0f', '').replace('\u200d', '').replace('➔', '→'), False))
+            return parts
+
         def process_text_segment(text_content, font):
             nonlocal cursor_x, cursor_y
             
-            # Split text into a list of single characters and contiguous emoji characters
-            parts = []
-            buffer = ""
-            for char in text_content:
-                if has_emoji and emoji.is_emoji(char):
-                    if buffer:
-                        parts.append(buffer)
-                        buffer = ""
-                    parts.append(char)
-                else:
-                    buffer += char
-            if buffer:
-                parts.append(buffer)
+            parts = split_text_and_emojis(text_content)
                 
-            for part in parts:
+            for part, is_emoji in parts:
                 if not part: continue
-                is_emoji = has_emoji and emoji.is_emoji(part)
                 current_font = get_emoji_font() if is_emoji else font
                 
                 if is_emoji:
@@ -252,22 +269,10 @@ class MarkdownRenderer:
                 current_line = []
                 cx = 0
                 
-                parts = []
-                buffer = ""
-                for char in text:
-                    if has_emoji and emoji.is_emoji(char):
-                        if buffer:
-                            parts.append(buffer)
-                            buffer = ""
-                        parts.append(char)
-                    else:
-                        buffer += char
-                if buffer:
-                    parts.append(buffer)
+                parts = split_text_and_emojis(text)
                     
-                for part in parts:
+                for part, is_emoji in parts:
                     if not part: continue
-                    is_emoji = has_emoji and emoji.is_emoji(part)
                     current_font = get_emoji_font() if is_emoji else font
                     
                     if is_emoji:

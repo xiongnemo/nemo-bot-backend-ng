@@ -7,7 +7,7 @@ class TestMarkdownRenderer(unittest.TestCase):
     def test_render(self):
         md_text = r"""# 综合测试报告
 ## 1. 复杂 Emoji 渲染
-这是一个复合 emoji：👨‍👩‍👧‍👦 🎯 测试。
+这是一个复合 emoji：👨‍👩‍👧‍👦 🎯 ⚠️ 🐻‍❄️ ❤️ ➔ 测试。
 中文在公式里： $\text{当前状态} E=mc^2 \text{测试}$
 
 ## 2. 表格与宽度测试表格

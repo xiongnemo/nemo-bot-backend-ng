@@ -108,6 +108,16 @@ def bot_execute(message: Message, config: dict):
                 logger.exception("Failed to reload tool registry: %s", e)
                 results.append(f"• 🛠️ Agent 工具池: 重载失败 ({e})")
 
+        # 4. Restart Worker Process Pool (ensures all isolated workers reload fresh code)
+        executor = getattr(context, "executor", None)
+        if executor is not None and hasattr(executor, "restart_plugin_pool"):
+            try:
+                executor.restart_plugin_pool()
+                results.append("• ⚡ 工作进程池: 已重启 ProcessPoolWorker，全部插件已刷新")
+            except Exception as e:
+                logger.exception("Failed to restart plugin pool: %s", e)
+                results.append(f"• ⚡ 工作进程池: 重启失败 ({e})")
+
     summary_text = "🔄 Nemo-bot 统一热重载完成:\n" + "\n".join(results)
     logger.info("Hot-reload completed by superuser %s (%s):\n%s", user_id, frontend, summary_text)
     message.reply(summary_text)

@@ -9,6 +9,7 @@ Features human-agent disentanglement (compact text for humans, comprehensive tex
 
 import os
 import re
+import time
 import uuid
 import logging
 import requests
@@ -31,20 +32,24 @@ logger = logging.getLogger(__name__)
 _name = "加密货币趋势与Vegas多级别分析"
 _command = ["vegas", "trend", "crypto_trend", "画线", "隧道"]
 _man = """查询加密资产 Vegas 隧道与动态支撑/压力位。
-用法: vegas [标的] [周期列表...]
+用法: vegas [标的] [周期列表...] [交易所]
+优先级: 币安 (Binance) -> OKX -> Gate -> Hyperliquid (自动级联回退)
 示例: 
-  vegas                  (默认查看 ETH 5m 单张大图)
+  vegas                  (默认查看 ETH 5m 单张大图，首选币安)
   vegas BTC              (默认查看 BTC 5m 单张大图)
   vegas BTC 1h           (查看 BTC 1h 详细图表)
   vegas BTC 5m 15m 30m   (并发拉取并渲染 5m、15m、30m 3合1拼图)
   vegas ETH 15m，1h、4h  (支持全角逗号、顿号、斜杠分隔)
   vegas BTC all          (查看 5m/15m/30m/1h/4h/1d 全部6大级别)
+  vegas BTC okx          (指定 OKX 交易所)
+  vegas ETH hl           (指定 Hyperliquid 交易所)
+  vegas BTC gate         (指定 Gate 交易所)
 """
 _tool_description = (
-    "获取加密货币(Gate永续合约)多级别 Vegas 隧道(EMA 12/144/169)及动态支撑/阻力位分析。\n"
+    "获取加密货币(支持 Binance、OKX、Gate、Hyperliquid 永续合约及现货，按币安->OKX->Gate->Hyperliquid 自动回退)多级别 Vegas 隧道(EMA 12/144/169)及动态支撑/阻力位分析。\n"
     "当你需要判断某币种(如 BTC, ETH, PAXG, SOL)的当前压力位、支撑位、趋势方向或回踩买入区间时，务必使用此工具。\n"
     "Agent 调用时默认并发拉取 5m、15m、30m、1h、4h、1d 六个核心级别的行情并输出详尽的数值汇总与 3x2 高清拼图；\n"
-    "支持传入特定周期或周期列表（如 'BTC 1h' 或 'ETH 15m 1h 4h'）。\n"
+    "支持传入特定周期或周期列表（如 'BTC 1h' 或 'ETH 15m 1h 4h'），也支持指定交易所（如 'BTC okx' 或 'ETH hl'）。\n"
     "返回结果包含完整的文字支撑压力汇总表以及结构化 JSON payload。"
 )
 _enabled = 1
@@ -62,28 +67,42 @@ INTERVAL_ALIASES = {
     "1W": "1w", "周线": "1w", "周K": "1w", "周": "1w",
 }
 
+EXCHANGE_ALIASES = {
+    "BINANCE": "binance", "BN": "binance", "币安": "binance",
+    "OKX": "okx", "OK": "okx", "欧易": "okx",
+    "GATE": "gate", "GATEIO": "gate", "芝麻": "gate",
+    "HL": "hyperliquid", "HYPERLIQUID": "hyperliquid",
+}
+
 ALL_FLAGS = {"ALL", "全", "全部", "全网", "-A", "--ALL"}
 
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
 
-def parse_trend_args(args_str: str, is_agent: bool) -> tuple[str, list[str]]:
+DEFAULT_EXCHANGE_PRIORITY = ["binance", "okx", "gate", "hyperliquid"]
+
+
+def parse_trend_args(args_str: str, is_agent: bool) -> tuple[str, list[str], str | None]:
     """
     Smart argument parser supporting full-width and half-width punctuation.
     - For Human: defaults to ETH and 5m.
     - For Agent: defaults to BTC and all 6 intervals.
     - Supports lists like: `BTC 5m 15m 30m` or `ETH 15m，1h、4h`.
+    - Supports exchange flags: `BTC okx` or `ETH hl`.
     """
     raw = args_str.strip()
     if not raw:
-        if is_agent:
-            return "BTC", list(ALL_INTERVALS)
-        else:
-            return "ETH", ["5m"]
+        sym = "BTC" if is_agent else "ETH"
+        ivs = list(ALL_INTERVALS) if is_agent else ["5m"]
+        return sym, ivs, None
 
     # Split using whitespace, full-width space (\u3000), commas, Chinese commas/enumeration marks, semicolons, slashes
     tokens = [t.strip() for t in re.split(r'[\s\u3000,，、;/／]+', raw) if t.strip()]
 
     symbol = None
     intervals = []
+    target_exchange = None
 
     for t in tokens:
         t_up = t.upper()
@@ -93,6 +112,8 @@ def parse_trend_args(args_str: str, is_agent: bool) -> tuple[str, list[str]]:
             std_iv = INTERVAL_ALIASES[t_up]
             if std_iv not in intervals:
                 intervals.append(std_iv)
+        elif t_up in EXCHANGE_ALIASES:
+            target_exchange = EXCHANGE_ALIASES[t_up]
         else:
             if symbol is None:
                 symbol = t_up
@@ -103,11 +124,70 @@ def parse_trend_args(args_str: str, is_agent: bool) -> tuple[str, list[str]]:
     if not intervals:
         intervals = list(ALL_INTERVALS) if is_agent else ["5m"]
 
-    return symbol, intervals
+    return symbol, intervals, target_exchange
 
 
-def fetch_gate_klines(symbol: str, interval: str = "1d", limit: int = 300) -> pd.DataFrame:
-    """Fetch raw K-lines from Gate.io USDT perpetual contract."""
+def fetch_binance_klines(symbol: str, interval: str = "1d", limit: int = 300) -> tuple[pd.DataFrame, str]:
+    """Fetch raw K-lines from Binance (Futures first, fallback to Spot)."""
+    base = symbol.upper().replace("USDT", "").replace("USD", "").replace("_", "").replace("-", "")
+    pair = f"{base}USDT"
+    source = "Binance 合约"
+    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={pair}&interval={interval}&limit={limit}"
+    r = requests.get(url, headers=DEFAULT_HEADERS, timeout=6)
+    data = r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
+
+    if not data:
+        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={interval}&limit={limit}"
+        r = requests.get(url, headers=DEFAULT_HEADERS, timeout=6)
+        source = "Binance 现货"
+        data = r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
+
+    if not data:
+        raise ValueError(f"Binance 无可用数据: {pair}")
+
+    df = pd.DataFrame(data).iloc[:, :6]
+    df.columns = ["Open time", "Open", "High", "Low", "Close", "Volume"]
+    df["Open time"] = pd.to_datetime(df["Open time"].astype(int), unit="ms")
+    df.set_index("Open time", inplace=True)
+    numeric_cols = ["Open", "High", "Low", "Close", "Volume"]
+    df[numeric_cols] = df[numeric_cols].astype(float)
+    return df, source
+
+
+def fetch_okx_klines(symbol: str, interval: str = "1d", limit: int = 300) -> tuple[pd.DataFrame, str]:
+    """Fetch raw K-lines from OKX (Perp SWAP first, fallback to Spot)."""
+    base = symbol.upper().replace("USDT", "").replace("USD", "").replace("_", "").replace("-", "")
+    bar_map = {"5m": "5m", "15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1D", "1w": "1W"}
+    bar = bar_map.get(interval, interval)
+    source = "OKX 永续"
+    inst_id = f"{base}-USDT-SWAP"
+    url = f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={limit}"
+    r = requests.get(url, headers=DEFAULT_HEADERS, timeout=6)
+    data = r.json().get("data", []) if r.status_code == 200 and isinstance(r.json(), dict) else []
+
+    if not data:
+        inst_id = f"{base}-USDT"
+        url = f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar={bar}&limit={limit}"
+        r = requests.get(url, headers=DEFAULT_HEADERS, timeout=6)
+        source = "OKX 现货"
+        data = r.json().get("data", []) if r.status_code == 200 and isinstance(r.json(), dict) else []
+
+    if not data:
+        raise ValueError(f"OKX 无可用数据: {base}")
+
+    # OKX returns newest first, reverse to oldest first
+    candles = data[::-1]
+    df = pd.DataFrame(candles).iloc[:, :6]
+    df.columns = ["Open time", "Open", "High", "Low", "Close", "Volume"]
+    df["Open time"] = pd.to_datetime(df["Open time"].astype(int), unit="ms")
+    df.set_index("Open time", inplace=True)
+    numeric_cols = ["Open", "High", "Low", "Close", "Volume"]
+    df[numeric_cols] = df[numeric_cols].astype(float)
+    return df, source
+
+
+def fetch_gate_klines(symbol: str, interval: str = "1d", limit: int = 300) -> tuple[pd.DataFrame, str]:
+    """Fetch raw K-lines from Gate.io (Futures first, fallback to Spot)."""
     clean_symbol = symbol.upper().replace("/", "").replace("-", "")
     if "_" not in clean_symbol:
         if clean_symbol.endswith("USDT"):
@@ -119,25 +199,102 @@ def fetch_gate_klines(symbol: str, interval: str = "1d", limit: int = 300) -> pd
     else:
         contract = clean_symbol
 
+    source = "Gate 合约"
     url = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
-    params = {
-        "contract": contract,
-        "interval": interval,
-        "limit": limit
-    }
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, list) or len(data) == 0:
-        raise ValueError(f"Gate 返回空数据或未收录合约: {contract}")
+    params = {"contract": contract, "interval": interval, "limit": limit}
+    r = requests.get(url, headers=DEFAULT_HEADERS, params=params, timeout=6)
+    data = r.json() if r.status_code == 200 and isinstance(r.json(), list) else []
+
+    if not data:
+        url = "https://api.gateio.ws/api/v4/spot/candlesticks"
+        r = requests.get(url, headers=DEFAULT_HEADERS, params={"currency_pair": contract, "interval": interval, "limit": limit}, timeout=6)
+        source = "Gate 现货"
+        if r.status_code == 200 and isinstance(r.json(), list) and len(r.json()) > 0:
+            spot_raw = r.json()
+            data = [{"t": row[0], "v": row[1], "c": row[2], "h": row[3], "l": row[4], "o": row[5]} for row in spot_raw]
+
+    if not data:
+        raise ValueError(f"Gate 无可用数据: {contract}")
 
     df = pd.DataFrame(data)
-    df.rename(columns={'t': 'Open time', 'o': 'Open', 'c': 'Close', 'h': 'High', 'l': 'Low', 'v': 'Volume'}, inplace=True)
-    df['Open time'] = pd.to_datetime(df['Open time'], unit='s')
-    df.set_index('Open time', inplace=True)
-    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    df.rename(columns={"t": "Open time", "o": "Open", "c": "Close", "h": "High", "l": "Low", "v": "Volume"}, inplace=True)
+    df["Open time"] = pd.to_datetime(df["Open time"].astype(int), unit="s")
+    df.set_index("Open time", inplace=True)
+    numeric_cols = ["Open", "High", "Low", "Close", "Volume"]
     df[numeric_cols] = df[numeric_cols].astype(float)
-    return df
+    return df, source
+
+
+def fetch_hyperliquid_klines(symbol: str, interval: str = "1d", limit: int = 300) -> tuple[pd.DataFrame, str]:
+    """Fetch raw K-lines from Hyperliquid perpetual futures."""
+    base = symbol.upper().replace("USDT", "").replace("USD", "").replace("_", "").replace("-", "")
+    def iv_to_ms(iv: str) -> int:
+        unit = iv[-1].lower()
+        num = int(iv[:-1])
+        if unit == "m": return num * 60 * 1000
+        if unit == "h": return num * 3600 * 1000
+        if unit == "d": return num * 86400 * 1000
+        if unit == "w": return num * 7 * 86400 * 1000
+        return 60 * 1000
+
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - iv_to_ms(interval) * (limit + 20)
+    url = "https://api.hyperliquid.xyz/info"
+    r = requests.post(url, headers=DEFAULT_HEADERS, json={"type": "candleSnapshot", "req": {"coin": base, "interval": interval, "startTime": start_ms}}, timeout=6)
+    if r.status_code != 200 or not isinstance(r.json(), list) or len(r.json()) == 0:
+        raise ValueError(f"Hyperliquid 无可用数据: {base}")
+
+    data = r.json()
+    if len(data) > limit:
+        data = data[-limit:]
+
+    df = pd.DataFrame(data)
+    df.rename(columns={"t": "Open time", "o": "Open", "c": "Close", "h": "High", "l": "Low", "v": "Volume"}, inplace=True)
+    df["Open time"] = pd.to_datetime(df["Open time"].astype(int), unit="ms")
+    df.set_index("Open time", inplace=True)
+    numeric_cols = ["Open", "High", "Low", "Close", "Volume"]
+    df[numeric_cols] = df[numeric_cols].astype(float)
+    return df, "Hyperliquid 永续"
+
+
+EXCHANGE_FETCHERS = {
+    "binance": fetch_binance_klines,
+    "okx": fetch_okx_klines,
+    "gate": fetch_gate_klines,
+    "hyperliquid": fetch_hyperliquid_klines,
+}
+
+
+def fetch_klines_by_exchange(exchange: str, symbol: str, interval: str, limit: int = 300) -> tuple[pd.DataFrame, str]:
+    fetcher = EXCHANGE_FETCHERS.get(exchange)
+    if not fetcher:
+        raise ValueError(f"未支持的交易所: {exchange}")
+    return fetcher(symbol, interval, limit=limit)
+
+
+def resolve_exchange_and_probe(symbol: str, probe_interval: str, target_exchange: str | None = None) -> tuple[str, str, pd.DataFrame]:
+    """
+    Resolve which exchange has the symbol and valid K-line data.
+    If target_exchange is specified, try only that exchange.
+    Otherwise, follow priority: Binance -> OKX -> Gate -> Hyperliquid.
+    Returns: (exchange_id, source_label, df_probe)
+    """
+    exchanges_to_try = [target_exchange] if target_exchange else DEFAULT_EXCHANGE_PRIORITY
+    attempts_errors = []
+
+    for ex in exchanges_to_try:
+        try:
+            df, src = fetch_klines_by_exchange(ex, symbol, probe_interval, limit=300)
+            if len(df) >= 30:
+                logger.info("[Crypto Trend] Resolved exchange for %s to %s (%s)", symbol, ex, src)
+                return ex, src, df
+            else:
+                attempts_errors.append(f"{ex}: 数据量不足 ({len(df)} 根)")
+        except Exception as e:
+            attempts_errors.append(f"{ex}: {e}")
+
+    err_summary = "; ".join(attempts_errors)
+    raise ValueError(f"全网未能获取 {symbol} 行情数据。尝试结果: {err_summary}")
 
 
 def compute_timeframe_indicators(df: pd.DataFrame) -> dict:
@@ -259,7 +416,7 @@ def compute_timeframe_indicators(df: pd.DataFrame) -> dict:
     }
 
 
-def format_human_compact_text(symbol: str, intervals: list[str], tf_data_dict: dict) -> str:
+def format_human_compact_text(symbol: str, intervals: list[str], tf_data_dict: dict, source_label: str = "Gate 合约") -> str:
     """Format a clean, concise 3-5 line summary for human group chats."""
     first_iv = intervals[0] if intervals[0] in tf_data_dict else next(iter(tf_data_dict))
     current_price = tf_data_dict[first_iv]['info']['close']
@@ -270,7 +427,7 @@ def format_human_compact_text(symbol: str, intervals: list[str], tf_data_dict: d
         dist_str = f"+{info['dist_pct']:.2f}%" if info['dist_pct'] > 0 else f"{info['dist_pct']:.2f}%"
         sig_str = f" | ⚠️ {info['signal_tag']}" if info.get("signal_tag") else ""
         return (
-            f"【{symbol} ({iv.upper()}) Vegas 隧道】现价: {current_price:,.2f} USDT (Gate 合约)\n"
+            f"【{symbol} ({iv.upper()}) Vegas 隧道】现价: {current_price:,.2f} USDT ({source_label})\n"
             f"• 状态: {info['status_short']}{sig_str} | EMA12: {info['ema12']:,.2f}\n"
             f"• 隧道({info['key_type']}): {info['tunnel_bot']:,.2f} ~ {info['tunnel_top']:,.2f} (距{info['key_type']}: {dist_str})\n"
             f"• 指标: RSI {info['rsi']:.1f} ({info['rsi_desc']}) | MACD {info['macd_desc']}"
@@ -278,7 +435,7 @@ def format_human_compact_text(symbol: str, intervals: list[str], tf_data_dict: d
 
     # Multi-interval compact bullet points
     lines = [
-        f"【{symbol} Vegas 隧道关键位】当前价: {current_price:,.2f} USDT (Gate 合约)"
+        f"【{symbol} Vegas 隧道关键位】当前价: {current_price:,.2f} USDT ({source_label})"
     ]
     for iv in intervals:
         if iv not in tf_data_dict:
@@ -293,14 +450,14 @@ def format_human_compact_text(symbol: str, intervals: list[str], tf_data_dict: d
     return "\n".join(lines).strip()
 
 
-def format_agent_detailed_text(symbol: str, tf_data_dict: dict) -> str:
+def format_agent_detailed_text(symbol: str, tf_data_dict: dict, source_label: str = "Gate.io 合约") -> str:
     """Format full comprehensive report for Agent Observation."""
     first_iv = '5m' if '5m' in tf_data_dict else next(iter(tf_data_dict))
     current_price = tf_data_dict[first_iv]['info']['close']
 
     lines = [
         f"【{symbol} Vegas 隧道多级别动态支撑压力分析】",
-        f"当前价格: {current_price:,.2f} USDT (数据源: Gate.io 合约)",
+        f"当前价格: {current_price:,.2f} USDT (数据源: {source_label})",
         ""
     ]
     groups = [
@@ -347,7 +504,7 @@ def format_agent_detailed_text(symbol: str, tf_data_dict: dict) -> str:
     return "\n".join(lines).strip()
 
 
-def draw_adaptive_grid_chart(symbol: str, intervals: list[str], tf_dict: dict, out_path: str, theme: str = ""):
+def draw_adaptive_grid_chart(symbol: str, intervals: list[str], tf_dict: dict, out_path: str, theme: str = "", source_label: str = ""):
     """Dynamically draw a composite chart matching the exact number of requested intervals."""
     k = len(intervals)
     is_dark = "Dark" in theme or True
@@ -461,8 +618,9 @@ def draw_adaptive_grid_chart(symbol: str, intervals: list[str], tf_dict: dict, o
         axes_flat[j].set_visible(False)
 
     interval_str = " / ".join(iv.upper() for iv in intervals)
+    source_str = f"  |  {source_label}" if source_label else ""
     fig.suptitle(
-        f"{symbol} Vegas 隧道动态支撑压力 ({interval_str})  |  现价: {latest_price:,.2f} USDT",
+        f"{symbol} Vegas 隧道动态支撑压力 ({interval_str})  |  现价: {latest_price:,.2f} USDT{source_str}",
         fontsize=14, fontweight="bold", color="#FFFFFF", y=suptitle_y
     )
     fig.savefig(out_path, dpi=150, facecolor=COLORS["bg"], bbox_inches="tight", pad_inches=0.2)
@@ -579,12 +737,7 @@ def draw_single_chart(symbol: str, interval: str, source: str, df: pd.DataFrame,
 @generic_exception_handler
 def bot_execute(message: Message, config: dict):
     is_agent = getattr(message.request, "is_agent", False)
-    raw_symbol, intervals = parse_trend_args(message.request.args, is_agent=is_agent)
-
-    if "_" not in raw_symbol and not raw_symbol.endswith("USDT") and not raw_symbol.endswith("USD"):
-        symbol = raw_symbol + "USDT"
-    else:
-        symbol = raw_symbol
+    raw_symbol, intervals, target_exchange = parse_trend_args(message.request.args, is_agent=is_agent)
 
     chart_dir = os.path.join(os.getcwd(), "data", "charts")
     os.makedirs(chart_dir, exist_ok=True)
@@ -595,14 +748,14 @@ def bot_execute(message: Message, config: dict):
     if len(intervals) == 1:
         iv = intervals[0]
         try:
-            df = fetch_gate_klines(symbol, interval=iv, limit=300)
-            source = f"Gate.io Futures ({iv})"
+            resolved_ex, source_label, df = resolve_exchange_and_probe(raw_symbol, iv, target_exchange=target_exchange)
+            source = f"{source_label} ({iv})"
         except Exception as e:
-            message.reply(f"500: nemo: 获取 {symbol} 行情失败 (Gate 接口返回错误: {e})。")
+            message.reply(f"404: nemo: 获取 {raw_symbol} 行情失败: {e}")
             return
 
-        if len(df) < 50:
-            message.reply(f"500: nemo: {symbol} 数据过少，无法进行指标计算。")
+        if len(df) < 30:
+            message.reply(f"404: nemo: {raw_symbol} 数据量过少 ({len(df)} 根)，无法进行指标计算。")
             return
 
         info = compute_timeframe_indicators(df)
@@ -611,11 +764,13 @@ def bot_execute(message: Message, config: dict):
         draw_single_chart(raw_symbol, iv, source, df, config, chart_filepath)
 
         tf_data_dict = {iv: {"df": df, "info": info}}
-        text_reply = format_human_compact_text(raw_symbol, intervals, tf_data_dict)
+        text_reply = format_human_compact_text(raw_symbol, intervals, tf_data_dict, source_label=source_label)
 
         message.payload = {
             "symbol": raw_symbol,
             "interval": iv,
+            "exchange": resolved_ex,
+            "source": source_label,
             "current_price": info['close'],
             "ema12": info['ema12'],
             "ema144": info['ema144'],
@@ -635,42 +790,52 @@ def bot_execute(message: Message, config: dict):
     tf_data_dict = {}
     errors = {}
 
-    def fetch_single(iv):
-        try:
-            df = fetch_gate_klines(symbol, interval=iv, limit=300)
-            if len(df) < 50:
-                return iv, None, "数据量过少"
-            info = compute_timeframe_indicators(df)
-            return iv, (df, info), None
-        except Exception as e:
-            return iv, None, str(e)
+    first_iv = intervals[0]
+    try:
+        resolved_ex, source_label, df_first = resolve_exchange_and_probe(raw_symbol, first_iv, target_exchange=target_exchange)
+        info_first = compute_timeframe_indicators(df_first)
+        tf_data_dict[first_iv] = {"df": df_first, "info": info_first}
+    except Exception as e:
+        message.reply(f"404: nemo: 获取 {raw_symbol} 多级别行情失败: {e}")
+        return
 
-    # Concurrently fetch ONLY the requested intervals
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(intervals), 6)) as executor:
-        future_map = {executor.submit(fetch_single, iv): iv for iv in intervals}
-        for future in concurrent.futures.as_completed(future_map):
-            iv, res_tuple, err = future.result()
-            if res_tuple:
-                df, info = res_tuple
-                tf_data_dict[iv] = {"df": df, "info": info}
-            else:
-                errors[iv] = err
+    remaining_ivs = [iv for iv in intervals if iv != first_iv]
+    if remaining_ivs:
+        def fetch_single(iv):
+            try:
+                df, _ = fetch_klines_by_exchange(resolved_ex, raw_symbol, interval=iv, limit=300)
+                if len(df) < 30:
+                    return iv, None, "数据量过少"
+                info = compute_timeframe_indicators(df)
+                return iv, (df, info), None
+            except Exception as e:
+                return iv, None, str(e)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(remaining_ivs), 6)) as executor:
+            future_map = {executor.submit(fetch_single, iv): iv for iv in remaining_ivs}
+            for future in concurrent.futures.as_completed(future_map):
+                iv, res_tuple, err = future.result()
+                if res_tuple:
+                    df, info = res_tuple
+                    tf_data_dict[iv] = {"df": df, "info": info}
+                else:
+                    errors[iv] = err
 
     if not tf_data_dict:
         sample_err = next(iter(errors.values()), "未知错误")
-        message.reply(f"500: nemo: 获取 {raw_symbol} 多级别行情失败。错误: {sample_err}")
+        message.reply(f"404: nemo: 获取 {raw_symbol} 多级别行情失败。错误: {sample_err}")
         return
 
     # Draw adaptive composite chart matching exact requested intervals
     chart_filename = f"{raw_symbol}_vegas_{uuid.uuid4().hex[:8]}.png"
     chart_filepath = os.path.join(chart_dir, chart_filename)
-    draw_adaptive_grid_chart(raw_symbol, intervals, tf_data_dict, chart_filepath, theme=config.get("theme", ""))
+    draw_adaptive_grid_chart(raw_symbol, intervals, tf_data_dict, chart_filepath, theme=config.get("theme", ""), source_label=source_label)
 
     # Text output: detailed for Agent, compact for Human
     if is_agent:
-        text_card = format_agent_detailed_text(raw_symbol, tf_data_dict)
+        text_card = format_agent_detailed_text(raw_symbol, tf_data_dict, source_label=source_label)
     else:
-        text_card = format_human_compact_text(raw_symbol, intervals, tf_data_dict)
+        text_card = format_human_compact_text(raw_symbol, intervals, tf_data_dict, source_label=source_label)
 
     # Set structured payload for Agent
     agent_levels = {}
@@ -693,6 +858,8 @@ def bot_execute(message: Message, config: dict):
     first_iv = intervals[0] if intervals[0] in tf_data_dict else next(iter(tf_data_dict))
     message.payload = {
         "symbol": raw_symbol,
+        "exchange": resolved_ex,
+        "source": source_label,
         "current_price": tf_data_dict[first_iv]["info"]["close"],
         "levels": agent_levels,
         "chart_local_path": os.path.abspath(chart_filepath)

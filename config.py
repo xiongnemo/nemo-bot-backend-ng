@@ -38,7 +38,8 @@ def get_platform(frontend: str) -> str:
         "satori_http": "qq",
         "ntchat": "wechat",
         "telegram": "telegram",
-        "console": "console"
+        "console": "console",
+        "discord": "discord",
     }
     return mapping.get(frontend.lower(), frontend.lower())
 

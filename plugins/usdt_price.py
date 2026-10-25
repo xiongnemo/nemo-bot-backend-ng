@@ -1,9 +1,11 @@
-from classes.message import Message
+import logging
+import traceback
+import requests
+
+from core.message import Message
 from utilities import generic_exception_handler
 
-import traceback
-
-import requests
+logger = logging.getLogger(__name__)
 
 # _allowed_groups = ['485541033'] # uncomment to set allowed groups, superusers will always be allowed
 # _allowed_users = ['1234567890'] # uncomment to set allowed users, superusers will always be allowed
@@ -11,6 +13,7 @@ import requests
 # _disallowed_groups = ['485541033'] # uncomment to set disallowed groups, superusers will always be allowed
 
 _command = ["U"]
+_exact = True
 _name = "C2C USDT 价格查询（Gate.IO）"
 _man = """查询当前 C2C USDT 价格。
 用法: {0}

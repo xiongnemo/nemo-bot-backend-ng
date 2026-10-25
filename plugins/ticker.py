@@ -15,6 +15,8 @@ _man = """查询加密资产及传统金融(TradFi)实时行情与合约多空�
 示例: 
   {0} BTC              (人类默认仅查币安 Binance，避免群聊刷屏)
   {0} BTC -a           (推荐 flag: -a / --all / 全网，并发返回 Gate+Binance+OKX+Hyperliquid 全平台深度与多空情绪)
+  {0} KURUMI           (主板未收录时自动下钻检索全网 DEX / 链上行情)
+  {0} <合约地址CA>     (直接输入合约地址检索链上池子深度与交易情绪)
   {0} BTC okx          (单独查 OKX)
   {0} ETH hl           (单独查 Hyperliquid)
   {0} ETH/BTC          (查 Gate 交叉盘)
@@ -547,7 +549,12 @@ def parse_args(args_str: str):
     if not filtered_tokens:
         return None, None, None, None, None, False, query_all, query_trend
 
-    symbol_raw = filtered_tokens[0].upper()
+    raw_first = filtered_tokens[0]
+    from plugins.onchain_dex import is_contract_address
+    if is_contract_address(raw_first):
+        return raw_first, None, "dex", None, raw_first, False, query_all, query_trend
+
+    symbol_raw = raw_first.upper()
     base, quote = None, None
     if "/" in symbol_raw:
         base, quote = symbol_raw.split("/", 1)
@@ -590,6 +597,14 @@ def bot_execute(message: Message, config: dict):
     
     if not base:
         message.reply("400: nemo: 请提供标的名称，例如 `coin BTC` 或 `coin BTC -a`")
+        return
+
+    # Direct CA routing
+    from plugins.onchain_dex import is_contract_address, fetch_onchain_data, build_onchain_report
+    if is_contract_address(base):
+        dex_pairs = fetch_onchain_data(base)
+        report = build_onchain_report(base, dex_pairs)
+        message.reply(f"💡 检测到输入为链上合约地址(CA)，已自动为你查询 DEX 行情:\n\n{report}")
         return
 
     if query_trend:
@@ -663,8 +678,16 @@ def bot_execute(message: Message, config: dict):
             msg += f"\n\n💡 提示: 发送 `vegas {base}` 可查看 5m/15m/30m/1h/4h/1d 级别 Vegas 隧道与多周期动态支撑/压力位。"
             message.reply(msg)
         else:
+            # Fallback to on-chain DEX
+            dex_pairs = fetch_onchain_data(base)
+            valid_pairs = [p for p in dex_pairs if float(p.get("liquidity", {}).get("usd", 0) or 0) >= 500]
+            if valid_pairs:
+                report = build_onchain_report(base, valid_pairs, is_fallback=True)
+                message.reply(report)
+                return
+
             attempts_str = "\n".join([f"- {a}" for a in attempts])
-            msg = f"404: nemo: 找不到相关的行情数据。\n我们为你同时尝试了以下交易所查询路径:\n{attempts_str}\n"
+            msg = f"404: nemo: 找不到相关的行情数据。\n我们为你同时尝试了以下交易所及链上查询路径:\n{attempts_str}\n- 链上 DEX (未发现有效流动性池)\n"
             if "/" not in symbol_raw and "_" not in symbol_raw:
                 msg += f"\n💡 提示: 如果你要查特定的交叉盘，请完整输入如 `{base}/BTC`。"
             message.reply(msg)
@@ -677,16 +700,44 @@ def bot_execute(message: Message, config: dict):
         message.reply(f"{result}\n\n💡 提示: 发送 `vegas {base}` 可查看 5m/15m/30m/1h/4h/1d 级别 Vegas 隧道与多周期动态支撑/压力位。")
         return
 
-    # Fallback to other exchanges if not found on Binance (e.g. MSFT or niche tokens)
-    for ex, fetcher in [('gate', fetch_gate), ('okx', fetch_okx), ('hyperliquid', fetch_hyperliquid)]:
+    # Fallback to other exchanges concurrently if not found on Binance (e.g. MSFT or niche tokens)
+    fallback_exchanges = [
+        ('gate', fetch_gate),
+        ('okx', fetch_okx),
+        ('hyperliquid', fetch_hyperliquid)
+    ]
+
+    def _run_fallback(ex, fetcher):
+        att = []
         q = 'USDC' if ex == 'hyperliquid' else current_quote
-        res = fetcher(base, q, market, attempts)
-        if res:
-            message.reply(f"{res}\n\n💡 提示: Binance 未收录该标的，已自动为你展示 {ex.upper()} 行情。可使用 `coin {symbol_raw} -a` 查全网。")
+        res = fetcher(base, q, market, att)
+        return ex, res, att
+
+    fallback_results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(fallback_exchanges)) as executor:
+        future_to_ex = {executor.submit(_run_fallback, ex, f): ex for ex, f in fallback_exchanges}
+        for future in concurrent.futures.as_completed(future_to_ex):
+            ex, res, att = future.result()
+            attempts.extend(att)
+            if res:
+                fallback_results[ex] = res
+
+    # Check in priority order: Gate -> OKX -> Hyperliquid
+    for ex, _ in fallback_exchanges:
+        if ex in fallback_results:
+            message.reply(f"{fallback_results[ex]}\n\n💡 提示: Binance 未收录该标的，已自动为你展示 {ex.upper()} 行情。可使用 `coin {symbol_raw} -a` 查全网。")
             return
 
+    # 4. ON-CHAIN FALLBACK: Mainboard exchanges have no record, search DEX
+    dex_pairs = fetch_onchain_data(base)
+    valid_pairs = [p for p in dex_pairs if float(p.get("liquidity", {}).get("usd", 0) or 0) >= 500]
+    if valid_pairs:
+        report = build_onchain_report(base, valid_pairs, is_fallback=True)
+        message.reply(report)
+        return
+
     attempts_str = "\n".join([f"- {a}" for a in attempts])
-    msg = f"404: nemo: 找不到相关的行情数据。\n我们为你尝试了以下查询路径:\n{attempts_str}\n"
+    msg = f"404: nemo: 找不到相关的行情数据。\n我们为你尝试了以下查询路径:\n{attempts_str}\n- 链上 DEX (未发现有效流动性池)\n"
     if "/" not in symbol_raw and "_" not in symbol_raw:
         msg += f"\n💡 提示: 如果你要查特定的交叉盘，请完整输入如 `{base}/BTC`。如需全网查询可加 `-a`。"
     message.reply(msg)

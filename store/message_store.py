@@ -198,6 +198,7 @@ class MessageStore:
                     "wechat": ["ntchat"],
                     "telegram": ["telegram"],
                     "console": ["console"],
+                    "discord": ["discord"],
                 }
                 matching_frontends = platform_map.get(prefix_lower, [prefix_lower])
                 

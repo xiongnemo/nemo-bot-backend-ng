@@ -24,17 +24,30 @@ class Ruleset:
     def __init__(self):
         self.rules: list = []
 
+    def add_exact(self, cmd: str, plugin: str, case_sensitive: bool = False):
+        def _match(msg: IngestMessage) -> RuleMatch | None:
+            text = msg.full_text.strip()
+            clean_text = text[1:].strip() if text.startswith(("/", "／")) else text
+            is_match = (clean_text == cmd) if case_sensitive else (clean_text.lower() == cmd.lower())
+            if is_match:
+                return RuleMatch(plugin, "")
+            return None
+        self.rules.append(_match)
+
     def add_prefix(self, prefix: str, plugin: str, strip: bool = True):
         def _match(msg: IngestMessage) -> RuleMatch | None:
             text = msg.full_text.strip()
-            if text.startswith(prefix):
-                args = text[len(prefix):].strip() if strip else text[len(prefix):]
-                return RuleMatch(plugin, args)
             # Support leading slash or fullwidth slash (e.g. /cmd or ／cmd)
-            if text.startswith(("/", "／")):
-                clean_text = text[1:]
-                if clean_text.startswith(prefix):
-                    args = clean_text[len(prefix):].strip() if strip else clean_text[len(prefix):]
+            clean_text = text[1:].strip() if text.startswith(("/", "／")) else text
+            for candidate in (text, clean_text):
+                if candidate.startswith(prefix):
+                    # Prevent accidental word-prefix matches when matching without space (strip=False).
+                    # E.g. ASCII prefix 'ca' matching 'calc', or 'ping' matching 'pingpong'.
+                    if not strip and prefix.isascii() and len(candidate) > len(prefix):
+                        next_char = candidate[len(prefix)]
+                        if next_char.isalnum() or next_char == "_":
+                            continue
+                    args = candidate[len(prefix):].strip() if strip else candidate[len(prefix):]
                     return RuleMatch(plugin, args)
             return None
         self.rules.append(_match)
@@ -92,6 +105,8 @@ class Ruleset:
                 logger.warning("Plugin '%s' has an empty _command list. It cannot be triggered via command mode.", module_name)
                 continue
 
+            exact_only = bool(getattr(mod, "_exact", False) or getattr(mod, "_exact_only", False))
+
             if isinstance(cmds, list):
                 for cmd in cmds:
                     if cmd in registered_commands:
@@ -99,10 +114,13 @@ class Ruleset:
                         sys.exit(1)
                     registered_commands.add(cmd)
 
-                    # Add rule with space first (so it strips the space from args)
-                    self.add_prefix(f"{cmd} ", module_name, strip=True)
-                    # Fallback rule without space
-                    self.add_prefix(cmd, module_name, strip=False)
+                    if exact_only:
+                        self.add_exact(cmd, module_name, case_sensitive=False)
+                    else:
+                        # Add rule with space first (so it strips the space from args)
+                        self.add_prefix(f"{cmd} ", module_name, strip=True)
+                        # Fallback rule without space
+                        self.add_prefix(cmd, module_name, strip=False)
 
         logger.info("Loaded %d routing rules", len(self.rules))
 

@@ -34,6 +34,7 @@ def _init_plugin_worker():
         from store.state_store import StateStore
         from store.system_control import SystemControl
         from runtime import context
+        import hashlib
 
         db = Database()
         state_store = StateStore(db)
@@ -43,9 +44,19 @@ def _init_plugin_worker():
 
         from plugins import get_loaded_plugins
         loaded = get_loaded_plugins()
+        for name, mod in loaded.items():
+            if hasattr(mod, "__file__") and mod.__file__:
+                try:
+                    fp = mod.__file__
+                    mtime = os.path.getmtime(fp)
+                    with open(fp, "rb") as f:
+                        sha1 = hashlib.sha1(f.read()).hexdigest()
+                    _plugin_cache_meta[name] = {"mtime": mtime, "sha1": sha1}
+                except Exception:
+                    pass
         logger.info(
-            "Worker %s: preloaded %d plugins",
-            os.getpid(), len(loaded),
+            "Worker %s: preloaded %d plugins (cached %d sha1)",
+            os.getpid(), len(loaded), len(_plugin_cache_meta),
         )
     except Exception:
         logger.error("Worker init failed:\n%s", traceback.format_exc())
@@ -99,16 +110,19 @@ def _run_plugin_in_worker(
             file_path = mod.__file__
             current_mtime = os.path.getmtime(file_path)
             
-            cache = _plugin_cache_meta.get(plugin_name, {})
-            if not cache or current_mtime > cache.get("mtime", 0):
-                # mtime changed or first time loading, check hash
+            cache = _plugin_cache_meta.get(plugin_name)
+            if cache is None:
+                # First time seen: record current hash
                 with open(file_path, "rb") as f:
                     current_sha1 = hashlib.sha1(f.read()).hexdigest()
-                
-                if cache and current_sha1 != cache.get("sha1"):
+                _plugin_cache_meta[plugin_name] = {"mtime": current_mtime, "sha1": current_sha1}
+            elif current_mtime > cache.get("mtime", 0):
+                # mtime changed: check hash against previous
+                with open(file_path, "rb") as f:
+                    current_sha1 = hashlib.sha1(f.read()).hexdigest()
+                if current_sha1 != cache.get("sha1"):
                     logger.info("Plugin %s has been hot-reloaded! (sha1: %s)", plugin_name, current_sha1[:8])
                     importlib.reload(mod)
-                    
                 _plugin_cache_meta[plugin_name] = {"mtime": current_mtime, "sha1": current_sha1}
     except Exception as e:
         logger.warning("Failed to check hot-reload status for plugin %s: %s", plugin_name, e)
@@ -150,6 +164,7 @@ class Executor:
             "Starting Executor: %d plugin workers, %d dispatch threads",
             pw, dispatch_workers,
         )
+        self._plugin_workers = pw
         self.plugin_pool = ProcessPoolExecutor(
             max_workers=pw,
             initializer=_init_plugin_worker,
@@ -224,6 +239,20 @@ class Executor:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def restart_plugin_pool(self):
+        """Restart worker processes in the process pool so all workers reload fresh code."""
+        old_pool = self.plugin_pool
+        self.plugin_pool = ProcessPoolExecutor(
+            max_workers=self._plugin_workers,
+            initializer=_init_plugin_worker,
+            max_tasks_per_child=200,
+        )
+        try:
+            old_pool.shutdown(wait=False)
+        except Exception as e:
+            logger.warning("Error shutting down previous plugin pool: %s", e)
+        logger.info("Plugin worker pool restarted successfully with %d workers.", self._plugin_workers)
 
     def shutdown(self, wait: bool = True):
         logger.info("Shutting down executor...")
