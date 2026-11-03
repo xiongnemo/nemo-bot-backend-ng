@@ -21,6 +21,7 @@ Quick start::
 
 from .types import ChatMessage, LLMResponse, ToolCall, ToolDefinition
 from .registry import ModelRegistry, get_registry
+from .base import parse_model_and_effort, map_effort_to_anthropic_budget, map_effort_to_gemini_budget
 
 __all__ = [
     "ChatMessage",
@@ -29,4 +30,7 @@ __all__ = [
     "ToolDefinition",
     "ModelRegistry",
     "get_registry",
+    "parse_model_and_effort",
+    "map_effort_to_anthropic_budget",
+    "map_effort_to_gemini_budget",
 ]

@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 
-from .base import BaseLLMClient
+from .base import BaseLLMClient, map_effort_to_gemini_budget, parse_model_and_effort
 from .types import ChatMessage, LLMResponse, ToolCall, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,10 @@ class GeminiClient(BaseLLMClient):
         max_tokens: int | None = None,
         **kwargs,
     ) -> LLMResponse:
+        # 0. Parse model & thinking effort
+        clean_model, effort = parse_model_and_effort(model)
+        effort = kwargs.pop("reasoning_effort", kwargs.pop("thinking_effort", effort))
+
         # 1. Translate messages
         contents: list[dict[str, Any]] = []
         for msg in messages:
@@ -74,6 +78,14 @@ class GeminiClient(BaseLLMClient):
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
 
+        if effort:
+            effort_str = str(effort).lower()
+            if effort_str in ("none", "off", "disabled"):
+                payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+            else:
+                budget = map_effort_to_gemini_budget(effort_str)
+                payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": budget}
+
         if tools:
             # Gemini nests function declarations
             payload["tools"] = [{"functionDeclarations": [
@@ -89,7 +101,7 @@ class GeminiClient(BaseLLMClient):
         # 3. Execute
         # Note: model name usually includes prefix "models/" in Gemini API,
         # but if the user just passes "gemini-1.5-pro", we append it.
-        model_path = model if "/" in model else f"models/{model}"
+        model_path = clean_model if "/" in clean_model else f"models/{clean_model}"
         url = f"{self.base_url}/v1beta/{model_path}:generateContent"
 
         resp = requests.post(url, params={"key": self.api_key}, json=payload, timeout=self.timeout)
@@ -104,10 +116,13 @@ class GeminiClient(BaseLLMClient):
         content = candidate.get("content", {})
         
         text = ""
+        thinking = ""
         tool_calls = []
         
         for part in content.get("parts", []):
-            if "text" in part:
+            if part.get("thought"):
+                thinking += part.get("text", "")
+            elif "text" in part:
                 text += part["text"]
             elif "functionCall" in part:
                 fc = part["functionCall"]
@@ -123,6 +138,7 @@ class GeminiClient(BaseLLMClient):
             tool_calls=tool_calls if tool_calls else None,
             usage=data.get("usageMetadata"),
             finish_reason=candidate.get("finishReason", ""),
+            thinking=thinking.strip() if thinking else None,
             raw=data,
         )
 

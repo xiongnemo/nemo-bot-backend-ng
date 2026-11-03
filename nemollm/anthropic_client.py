@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 
-from .base import BaseLLMClient
+from .base import BaseLLMClient, map_effort_to_anthropic_budget, parse_model_and_effort
 from .types import ChatMessage, LLMResponse, ToolCall, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,10 @@ class AnthropicClient(BaseLLMClient):
         max_tokens: int | None = None,
         **kwargs,
     ) -> LLMResponse:
+        # 0. Parse model & thinking effort
+        clean_model, effort = parse_model_and_effort(model)
+        effort = kwargs.pop("reasoning_effort", kwargs.pop("thinking_effort", effort))
+
         # 1. Translate messages
         wire_messages: list[dict[str, Any]] = []
         for msg in messages:
@@ -56,7 +60,7 @@ class AnthropicClient(BaseLLMClient):
 
         # 2. Build payload
         payload: dict[str, Any] = {
-            "model": model,
+            "model": clean_model,
             "messages": wire_messages,
             "max_tokens": max_tokens or 8192,
         }
@@ -66,6 +70,18 @@ class AnthropicClient(BaseLLMClient):
             payload["temperature"] = final_temp
         if system:
             payload["system"] = system
+
+        if effort:
+            effort_str = str(effort).lower()
+            if effort_str in ("none", "off", "disabled"):
+                payload["thinking"] = {"type": "disabled"}
+            else:
+                budget = map_effort_to_anthropic_budget(effort_str)
+                if budget > 0:
+                    payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                    if payload["max_tokens"] <= budget:
+                        payload["max_tokens"] = budget + 4096
+                    payload.pop("temperature", None)
 
         if tools:
             # Anthropic tools omit the {"type": "function", "function": {...}} nesting

@@ -8,7 +8,7 @@ from typing import Any
 
 import requests
 
-from .base import BaseLLMClient
+from .base import BaseLLMClient, parse_model_and_effort
 from .types import ChatMessage, LLMResponse, ToolCall, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,10 @@ class OpenAIResponsesClient(BaseLLMClient):
         max_tokens: int | None = None,
         **kwargs,
     ) -> LLMResponse:
+        # 0. Parse model & thinking effort
+        clean_model, effort = parse_model_and_effort(model)
+        effort = kwargs.pop("reasoning_effort", kwargs.pop("thinking_effort", effort))
+
         # 1. Build input array
         wire_messages: list[dict[str, Any]] = []
         if system:
@@ -38,9 +42,24 @@ class OpenAIResponsesClient(BaseLLMClient):
 
         # 2. Build payload
         payload: dict[str, Any] = {
-            "model": model,
+            "model": clean_model,
             "input": wire_messages,
         }
+
+        # Reasoning effort / thinking configuration
+        is_glm = "glm" in clean_model.lower() or "zhipu" in clean_model.lower()
+        if effort:
+            effort_str = str(effort).lower()
+            if effort_str not in ("none", "off", "disabled"):
+                payload["reasoning"] = {"effort": effort_str}
+                if is_glm:
+                    payload["thinking"] = {"type": "enabled"}
+            elif is_glm:
+                payload["thinking"] = {"type": "disabled"}
+        elif is_glm:
+            payload["thinking"] = {"type": "enabled"}
+            if "glm-5" in clean_model.lower():
+                payload["reasoning"] = {"effort": "high"}
         
         final_temp = temperature if temperature is not None else self.default_temperature
         if final_temp is not None:
@@ -64,7 +83,7 @@ class OpenAIResponsesClient(BaseLLMClient):
         }
 
         is_stream = payload.get("stream", False)
-        logger.debug("POST %s (model=%s, tools=%d, stream=%s)", url, model, len(tools or []), is_stream)
+        logger.debug("POST %s (model=%s, tools=%d, stream=%s)", url, clean_model, len(tools or []), is_stream)
         resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout, stream=is_stream)
 
         # Handle o1 or models that do not support temperature
@@ -79,6 +98,7 @@ class OpenAIResponsesClient(BaseLLMClient):
         resp.raise_for_status()
 
         out_text = ""
+        thinking_text = ""
         wire_tool_calls = []
         usage_data = None
         raw_data = {}
@@ -103,6 +123,10 @@ class OpenAIResponsesClient(BaseLLMClient):
                         delta = chunk["choices"][0].get("delta", {})
                         if "content" in delta and isinstance(delta["content"], str):
                             out_text += delta["content"]
+                        if "reasoning_content" in delta and isinstance(delta["reasoning_content"], str):
+                            thinking_text += delta["reasoning_content"]
+                        elif "reasoning" in delta and isinstance(delta["reasoning"], str):
+                            thinking_text += delta["reasoning"]
                         if "tool_calls" in delta:
                             for tc in delta["tool_calls"]:
                                 idx = tc.get("index", tc.get("id", len(tool_calls_dict)))
@@ -122,10 +146,17 @@ class OpenAIResponsesClient(BaseLLMClient):
                             if out_item.get("type") == "message" and "content" in out_item:
                                 if isinstance(out_item["content"], str):
                                     out_text += out_item["content"]
+                            elif out_item.get("type") in ("reasoning", "thought") and "content" in out_item:
+                                if isinstance(out_item["content"], str):
+                                    thinking_text += out_item["content"]
                             elif "delta" in out_item:
                                 delta = out_item["delta"]
                                 if "content" in delta and isinstance(delta["content"], str):
                                     out_text += delta["content"]
+                                if "reasoning_content" in delta and isinstance(delta["reasoning_content"], str):
+                                    thinking_text += delta["reasoning_content"]
+                                elif "reasoning" in delta and isinstance(delta["reasoning"], str):
+                                    thinking_text += delta["reasoning"]
 
                     if "usage" in chunk:
                         usage_data = chunk["usage"]
@@ -149,6 +180,13 @@ class OpenAIResponsesClient(BaseLLMClient):
                             for block in out_item["content"]:
                                 if isinstance(block, dict) and block.get("type") in ("output_text", "text"):
                                     out_text += block.get("text", "")
+                                elif isinstance(block, dict) and block.get("type") in ("reasoning", "thought"):
+                                    thinking_text += block.get("text", "") or block.get("thought", "")
+                    elif out_item.get("type") in ("reasoning", "thought"):
+                        if isinstance(out_item.get("content"), str):
+                            thinking_text += out_item["content"]
+                        elif isinstance(out_item.get("text"), str):
+                            thinking_text += out_item["text"]
                     elif out_item.get("type") == "tool_call":
                         wire_tool_calls.append(out_item)
                     # Some implementations put tool_calls inside message content
@@ -159,6 +197,9 @@ class OpenAIResponsesClient(BaseLLMClient):
                 choice = data.get("choices", [{}])[0]
                 msg_out = choice.get("message", {})
                 out_text = msg_out.get("content") or ""
+                reasoning = msg_out.get("reasoning_content") or msg_out.get("reasoning")
+                if reasoning and isinstance(reasoning, str):
+                    thinking_text += reasoning
                 wire_tool_calls = msg_out.get("tool_calls") or []
             else:
                 logger.warning("Unexpected response format from Responses API: %s", data)
@@ -168,6 +209,7 @@ class OpenAIResponsesClient(BaseLLMClient):
             tool_calls=self._parse_tool_calls(wire_tool_calls),
             usage=usage_data,
             finish_reason="stop", # Defaults to stop
+            thinking=thinking_text if thinking_text else None,
             raw=raw_data,
         )
 

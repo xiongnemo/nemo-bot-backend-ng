@@ -61,6 +61,56 @@ def get_mono_font():
             return p
     return "arial.ttf"
 
+
+EMOJI_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "emoji_cache")
+
+def get_emoji_image(emoji_str: str, target_size: int):
+    """
+    Fetch and return a PIL Image for an emoji (specifically ZWJ / composite emojis).
+    Caches downloaded emojis locally in data/emoji_cache/.
+    """
+    if not emoji_str:
+        return None
+    try:
+        os.makedirs(EMOJI_CACHE_DIR, exist_ok=True)
+        hex_full = '-'.join(f'{ord(c):x}' for c in emoji_str)
+        hex_no_vs = '-'.join(f'{ord(c):x}' for c in emoji_str if c != '\ufe0f')
+        
+        path_full = os.path.join(EMOJI_CACHE_DIR, f"{hex_full}.png")
+        path_no_vs = os.path.join(EMOJI_CACHE_DIR, f"{hex_no_vs}.png")
+        
+        img_path = None
+        if os.path.exists(path_full):
+            img_path = path_full
+        elif os.path.exists(path_no_vs):
+            img_path = path_no_vs
+        else:
+            import httpx
+            urls = [
+                f"https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/{hex_full}.png",
+                f"https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/{hex_no_vs}.png",
+                f"https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/{hex_full}.png",
+                f"https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/{hex_no_vs}.png"
+            ]
+            for u in urls:
+                try:
+                    resp = httpx.get(u, timeout=2.0)
+                    if resp.status_code == 200:
+                        chosen_path = path_full if u.endswith(f"{hex_full}.png") else path_no_vs
+                        with open(chosen_path, "wb") as f:
+                            f.write(resp.content)
+                        img_path = chosen_path
+                        break
+                except Exception:
+                    continue
+                    
+        if img_path and os.path.exists(img_path):
+            img = Image.open(img_path).convert("RGBA")
+            return img.resize((target_size, target_size), Image.LANCZOS)
+    except Exception as e:
+        logger.debug(f"Failed to resolve emoji image for {emoji_str!r}: {e}")
+    return None
+
 class MarkdownRenderer:
     def __init__(self, max_width=800, padding=40, font_size=20, line_height=1.5):
         self.max_width = max_width
@@ -121,9 +171,10 @@ class MarkdownRenderer:
             """
             Split text cleanly into alternating (substring, is_emoji) tuples.
             Uses emoji.emoji_list() to accurately match full Unicode graphemes
-            (including multi-codepoint sequences, skin tones, etc.), and strips
-            variation selector \ufe0f and zero-width joiner \u200d that cause
-            missing-glyph tofu boxes (\u25af) in FreeType / Pillow on Windows.
+            (including multi-codepoint sequences, skin tones, etc.), while preserving
+            full sequences so composite emojis can be rendered as images, and stripping
+            stray variation selector \ufe0f and zero-width joiner \u200d from normal text
+            that cause missing-glyph tofu boxes (\u25af) in FreeType / Pillow on Windows.
             """
             parts = []
             if has_emoji:
@@ -135,7 +186,7 @@ class MarkdownRenderer:
                         clean_text = text_content[last_idx:start].replace('\ufe0f', '').replace('\u200d', '').replace('➔', '→')
                         if clean_text:
                             parts.append((clean_text, False))
-                    e_str = m['emoji'].replace('\ufe0f', '').replace('\u200d', '')
+                    e_str = m['emoji']
                     if e_str:
                         parts.append((e_str, True))
                     last_idx = end
@@ -151,30 +202,47 @@ class MarkdownRenderer:
             nonlocal cursor_x, cursor_y
             
             parts = split_text_and_emojis(text_content)
+            current_font_size = int(self.font_size * font_size_multiplier)
+            emoji_target_size = int(current_font_size * 1.05)
                 
             for part, is_emoji in parts:
                 if not part: continue
-                current_font = get_emoji_font() if is_emoji else font
                 
                 if is_emoji:
-                    if cursor_x + current_font.getlength(part) > self.max_width - self.padding:
-                        commit_newline()
-                    draw_ops.append(("text", (cursor_x, cursor_y, part, current_font)))
-                    cursor_x += current_font.getlength(part)
+                    # Check if this is a composite emoji (ZWJ sequence or multi-codepoint)
+                    is_composite = ('\u200d' in part) or (len([c for c in part if c != '\ufe0f']) > 1)
+                    emoji_img = None
+                    if is_composite:
+                        emoji_img = get_emoji_image(part, emoji_target_size)
+                    
+                    if emoji_img:
+                        if cursor_x + emoji_img.width > self.max_width - self.padding:
+                            commit_newline()
+                        y_offset = int(current_font_size * 0.15)
+                        draw_ops.append(("image", (cursor_x, cursor_y + y_offset, emoji_img)))
+                        cursor_x += emoji_img.width + 2
+                    else:
+                        current_font = get_emoji_font()
+                        clean_e = part.replace('\ufe0f', '').replace('\u200d', '')
+                        if not clean_e: continue
+                        if cursor_x + current_font.getlength(clean_e) > self.max_width - self.padding:
+                            commit_newline()
+                        draw_ops.append(("text", (cursor_x, cursor_y, clean_e, current_font)))
+                        cursor_x += current_font.getlength(clean_e)
                 else:
                     buffer = ""
                     for char in part:
-                        next_len = current_font.getlength(buffer + char)
+                        next_len = font.getlength(buffer + char)
                         if cursor_x + next_len > self.max_width - self.padding:
                             if buffer:
-                                draw_ops.append(("text", (cursor_x, cursor_y, buffer, current_font)))
+                                draw_ops.append(("text", (cursor_x, cursor_y, buffer, font)))
                             commit_newline()
                             buffer = char
                         else:
                             buffer += char
                     if buffer:
-                        draw_ops.append(("text", (cursor_x, cursor_y, buffer, current_font)))
-                        cursor_x += current_font.getlength(buffer)
+                        draw_ops.append(("text", (cursor_x, cursor_y, buffer, font)))
+                        cursor_x += font.getlength(buffer)
                 
         def process_math(expr, is_block=False):
             nonlocal cursor_x, cursor_y
@@ -270,26 +338,44 @@ class MarkdownRenderer:
                 cx = 0
                 
                 parts = split_text_and_emojis(text)
+                cell_font_size = int(self.font_size * font_size_multiplier)
+                emoji_target_size = int(cell_font_size * 1.05)
                     
                 for part, is_emoji in parts:
                     if not part: continue
-                    current_font = get_emoji_font() if is_emoji else font
                     
                     if is_emoji:
-                        w = current_font.getlength(part)
-                        if cx + w > max_w and current_line:
-                            lines.append(current_line)
-                            current_line = []
-                            cx = 0
-                        current_line.append((cx, part, current_font))
-                        cx += w
+                        is_composite = ('\u200d' in part) or (len([c for c in part if c != '\ufe0f']) > 1)
+                        emoji_img = None
+                        if is_composite:
+                            emoji_img = get_emoji_image(part, emoji_target_size)
+                            
+                        if emoji_img:
+                            w = emoji_img.width + 2
+                            if cx + w > max_w and current_line:
+                                lines.append(current_line)
+                                current_line = []
+                                cx = 0
+                            current_line.append((cx, emoji_img, "image"))
+                            cx += w
+                        else:
+                            current_font = get_emoji_font()
+                            clean_e = part.replace('\ufe0f', '').replace('\u200d', '')
+                            if not clean_e: continue
+                            w = current_font.getlength(clean_e)
+                            if cx + w > max_w and current_line:
+                                lines.append(current_line)
+                                current_line = []
+                                cx = 0
+                            current_line.append((cx, clean_e, "text", current_font))
+                            cx += w
                     else:
                         buffer = ""
                         for char in part:
-                            next_len = current_font.getlength(buffer + char)
+                            next_len = font.getlength(buffer + char)
                             if cx + next_len > max_w:
                                 if buffer:
-                                    current_line.append((cx, buffer, current_font))
+                                    current_line.append((cx, buffer, "text", font))
                                 if current_line:
                                     lines.append(current_line)
                                 current_line = []
@@ -298,8 +384,8 @@ class MarkdownRenderer:
                             else:
                                 buffer += char
                         if buffer:
-                            current_line.append((cx, buffer, current_font))
-                            cx += current_font.getlength(buffer)
+                            current_line.append((cx, buffer, "text", font))
+                            cx += font.getlength(buffer)
                 if current_line:
                     lines.append(current_line)
                 return lines if lines else [[]]
@@ -323,11 +409,18 @@ class MarkdownRenderer:
                     cw = col_widths[c_idx]
                     # Draw cell borders
                     draw_ops.append(("rect", (cx, cursor_y, cx + cw, cursor_y + row_h, None, (200, 200, 200))))
-                    # Draw cell text
+                    # Draw cell text and inline emoji images
                     for l_idx, line in enumerate(lines):
                         y_pos = cursor_y + cell_padding/2 + l_idx * self.line_height
-                        for (ox, text, current_font) in line:
-                            draw_ops.append(("text", (cx + cell_padding + ox, y_pos, text, current_font)))
+                        for item in line:
+                            if len(item) == 3 and item[2] == "image":
+                                ox, img_val, _ = item
+                                draw_ops.append(("image", (cx + cell_padding + ox, y_pos + int(self.font_size * 0.15), img_val)))
+                            else:
+                                ox = item[0]
+                                content = item[1]
+                                current_font = item[3] if len(item) >= 4 else item[2]
+                                draw_ops.append(("text", (cx + cell_padding + ox, y_pos, content, current_font)))
                     cx += cw
                 cursor_y += row_h
             commit_newline(10)

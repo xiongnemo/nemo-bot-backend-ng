@@ -20,6 +20,36 @@ import config as app_config
 logger = logging.getLogger(__name__)
 
 class FeedService:
+    @staticmethod
+    def _is_roundup_or_digest(title: str, content: str = "") -> bool:
+        """
+        Detect if incoming news is a multi-topic daily roundup/recap/digest/summary
+        (e.g. 金十数据整理, 每日行业动态汇总, 观点梳理, 财经早餐) rather than real-time breaking news.
+        """
+        if not title:
+            return False
+            
+        digest_markers = (
+            "金十数据整理",
+            "金十整理",
+            "财经早餐",
+            "要闻速递",
+            "动态汇总",
+            "观点梳理",
+            "新闻汇总",
+            "走势回顾",
+            "每日复盘",
+            "盘前市场要闻",
+            "昨日今晨",
+            "局势跟踪",
+            "24小时都忙了什么",
+            "事件回顾",
+            "早报",
+            "晚报",
+            "每日总结"
+        )
+        return any(marker in title for marker in digest_markers)
+
     def __init__(self, db: Database, sender: Sender):
         self.db = db
         self.sender = sender
@@ -47,6 +77,24 @@ class FeedService:
             return True, "Ignored empty content.", 200
 
         conn = self.db.get_conn()
+
+        # Check if feed is a multi-topic periodic digest/roundup (e.g. 金十数据整理, 财经早餐)
+        # We save it into DB so it can be queried, but skip real-time group broadcast
+        if self._is_roundup_or_digest(title, content):
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO feeds (channel_name, title, content, original_time, created_at, meta_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (channel_name, title, content, original_time, time.time(), json.dumps(meta, ensure_ascii=False))
+                )
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.error("Failed to insert digest feed %s: %s", channel_name, e)
+            logger.info("Feed '%s' is a periodic digest/roundup. Saved to DB but skipped broadcast.", title)
+            return True, "Feed accepted and saved (digest/roundup skipped for broadcast).", 200
         
         # 1. Check if channel exists, if not, auto-create it
         cur = conn.execute("SELECT id, enable_gatekeeper FROM channels WHERE name = ?", (channel_name,))
@@ -210,13 +258,21 @@ Content: {content}
 Evaluate the new news:
 1. Is it an advertisement, self-promotion, or low-value clickbait? Look out for phrases like "点击查看" (Click to view), "马上参与" (Participate now), "正在直播中" (Live broadcasting), "一图看懂" (Understand with one picture), "一文看懂" (Understand with one article), ">>", or meaningless placeholders. ALSO reject "teasing" messages (吊胃口的消息) that ask a question without providing the actual answer in the text (e.g. "what is the outlook? Read this article."). If it falls into this category, you MUST set should_forward to false, regardless of how important the topic seems.
 2. Is it a duplicate or just a minor update of the events in the history? (Set is_duplicate to true if yes)
-3. If it is NOT a duplicate and NOT an ad/clickbait, is it highly valuable/breaking/important enough to actively alert these specific users based on their interests and current chat context? (Set should_forward to true if yes)
+3. Is it a periodic digest, morning/evening brief, or multi-topic recap (e.g. 早餐, 早报, 晚报, 每日汇总, 观点梳理)? If yes, set should_forward to false. Users only want breaking real-time single-event news.
+4. Geographic & Market Relevance (Strict Noise Filter for Trading/Macro/Crypto Groups):
+   - For groups focused on Gold, BTC, and US macro, REJECT routine domestic economic prints from secondary economies (e.g. routine domestic CPI/PMI/retail/trade data from Spain, UK, France, Germany, Italy, India, Australia, etc.). These do NOT move global Gold or BTC and cause severe notification fatigue.
+   - ONLY forward:
+     a) United States core macro (US CPI, Core PCE, Non-Farm Payrolls/NFP, ADP, Fed FOMC rate decisions, Powell speeches, US GDP).
+     b) Direct breaking news about Gold/Precious Metals (XAU, COMEX, major central bank reserves change) and Crypto/Bitcoin (major regulatory actions, sovereign adoption, catastrophic exchange/whale moves).
+     c) Major systemic global black swans (e.g. outbreak of war, direct major power military conflict, systemic banking collapse).
+5. High Conviction Bar:
+   - Only forward news that has genuine market-moving impact. When in doubt, do NOT forward.
 
 Return your evaluation as a strict JSON object with this format:
 {{
   "is_duplicate": boolean,
   "should_forward": boolean,
-  "reason": "short explanation in Chinese (必须用中文写评语)"
+  "reason": "short explanation in Chinese (必须用中文写评语，说明为何转发或为何拒绝)"
 }}
 """
             # Request JSON mode natively since we added it

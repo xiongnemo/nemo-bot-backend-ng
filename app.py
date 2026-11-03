@@ -287,8 +287,8 @@ def create_channel():
 
 @app.route("/api/reload", methods=["GET", "POST"])
 def reload_backend():
-    """Hot-reload routing rules, personas, and plugin metadata without restarting."""
-    global ruleset, router
+    """Hot-reload routing rules, personas, plugin metadata, and feed service without restarting."""
+    global ruleset, router, feed_service
     from routing.ruleset import Ruleset
     from runtime import context
     new_ruleset = Ruleset()
@@ -304,12 +304,33 @@ def reload_backend():
             tools_cnt = context.tool_registry.reload_plugins()
         else:
             tools_cnt = len(context.tool_registry.get_all_definitions())
-    logger.info("Hot-reloaded %d routing rules, %d personas, and %d tools via /api/reload", len(ruleset.rules), persona_cnt, tools_cnt)
+
+    feed_service_reloaded = False
+    try:
+        import importlib
+        import core.feed_service
+        importlib.reload(core.feed_service)
+        from core.feed_service import FeedService
+        feed_service = FeedService(db, sender)
+        feed_service_reloaded = True
+        logger.info("Hot-reloaded feed_service successfully")
+    except Exception as e:
+        logger.exception("Failed to hot-reload feed_service: %s", e)
+
+    # Restart worker process pool so background workers reload fresh plugin code
+    if getattr(context, "executor", None) and hasattr(context.executor, "restart_plugin_pool"):
+        try:
+            context.executor.restart_plugin_pool()
+        except Exception as e:
+            logger.warning("Failed to restart plugin pool in /api/reload: %s", e)
+
+    logger.info("Hot-reloaded %d routing rules, %d personas, and %d tools via /api/reload (feed_service: %s)", len(ruleset.rules), persona_cnt, tools_cnt, feed_service_reloaded)
     return jsonify({
         "status": "ok",
         "rules_count": len(ruleset.rules),
         "personas_count": persona_cnt,
         "tools_count": tools_cnt,
+        "feed_service_reloaded": feed_service_reloaded,
     })
 
 

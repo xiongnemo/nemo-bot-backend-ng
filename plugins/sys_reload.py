@@ -15,6 +15,35 @@ from utilities import generic_exception_handler
 
 logger = logging.getLogger(__name__)
 
+
+def reload_feed_service() -> bool:
+    """Dynamically reloads core.feed_service and re-binds to __main__.feed_service."""
+    try:
+        import sys
+        import importlib
+        if "core.feed_service" in sys.modules:
+            import core.feed_service
+            importlib.reload(core.feed_service)
+            from core.feed_service import FeedService
+            from runtime import context
+            main_mod = sys.modules.get("__main__")
+            db = getattr(context, "db", None) or getattr(main_mod, "db", None)
+            sender = getattr(context, "sender", None) or getattr(main_mod, "sender", None)
+            if db and sender:
+                new_fs = FeedService(db, sender)
+                if main_mod:
+                    main_mod.feed_service = new_fs
+                logger.info("Successfully hot-reloaded FeedService in live runtime process!")
+                return True
+    except Exception as e:
+        logger.exception("Failed to reload feed_service: %s", e)
+    return False
+
+
+# Automatically reload FeedService when this module is reloaded
+reload_feed_service()
+
+
 _name = "系统统一热重载"
 _command = ["reload", "热重载", "重载"]
 _man = """系统组件统一热重载（仅限超级管理员）。

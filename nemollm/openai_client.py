@@ -8,7 +8,7 @@ from typing import Any
 
 import requests
 
-from .base import BaseLLMClient
+from .base import BaseLLMClient, parse_model_and_effort
 from .types import ChatMessage, LLMResponse, ToolCall, ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,10 @@ class OpenAIClient(BaseLLMClient):
         max_tokens: int | None = None,
         **kwargs,
     ) -> LLMResponse:
+        # 0. Parse model & thinking effort
+        clean_model, effort = parse_model_and_effort(model)
+        effort = kwargs.pop("reasoning_effort", kwargs.pop("thinking_effort", effort))
+
         # 1. Build messages array (system goes first if present)
         wire_messages: list[dict[str, Any]] = []
         if system:
@@ -38,9 +42,25 @@ class OpenAIClient(BaseLLMClient):
 
         # 2. Build payload
         payload: dict[str, Any] = {
-            "model": model,
+            "model": clean_model,
             "messages": wire_messages,
         }
+
+        # Thinking / reasoning_effort configuration
+        is_glm = "glm" in clean_model.lower() or "zhipu" in clean_model.lower()
+        if effort:
+            effort_str = str(effort).lower()
+            if effort_str in ("none", "off", "disabled"):
+                if is_glm:
+                    payload["thinking"] = {"type": "disabled"}
+            else:
+                payload["reasoning_effort"] = effort_str
+                if is_glm:
+                    payload["thinking"] = {"type": "enabled"}
+        elif is_glm:
+            payload["thinking"] = {"type": "enabled"}
+            if "glm-5" in clean_model.lower():
+                payload["reasoning_effort"] = "high"
         
         final_temp = temperature if temperature is not None else self.default_temperature
         if final_temp is not None:
@@ -67,7 +87,7 @@ class OpenAIClient(BaseLLMClient):
             "Content-Type": "application/json",
         }
 
-        logger.debug("POST %s (model=%s, tools=%d)", url, model, len(tools or []))
+        logger.debug("POST %s (model=%s, tools=%d)", url, clean_model, len(tools or []))
         resp = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
 
         # Handle o1 or models that do not support temperature
@@ -86,12 +106,14 @@ class OpenAIClient(BaseLLMClient):
         # 4. Parse response
         choice = data.get("choices", [{}])[0]
         msg_out = choice.get("message", {})
+        reasoning = msg_out.get("reasoning_content") or msg_out.get("reasoning")
 
         return LLMResponse(
             text=msg_out.get("content") or "",
             tool_calls=self._parse_tool_calls(msg_out.get("tool_calls")),
             usage=data.get("usage"),
             finish_reason=choice.get("finish_reason", ""),
+            thinking=reasoning if reasoning else None,
             raw=data,
         )
 

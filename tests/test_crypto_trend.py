@@ -40,39 +40,39 @@ class TestCryptoTrend(unittest.TestCase):
 
     def test_parse_trend_args(self):
         # 1. Empty input
-        s, ivs = parse_trend_args("", is_agent=False)
+        s, ivs, *_ = parse_trend_args("", is_agent=False)
         self.assertEqual(s, "ETH")
         self.assertEqual(ivs, ["5m"])
 
-        s, ivs = parse_trend_args("", is_agent=True)
+        s, ivs, *_ = parse_trend_args("", is_agent=True)
         self.assertEqual(s, "BTC")
         self.assertEqual(ivs, ALL_INTERVALS)
 
         # 2. Single symbol
-        s, ivs = parse_trend_args("BTC", is_agent=False)
+        s, ivs, *_ = parse_trend_args("BTC", is_agent=False)
         self.assertEqual(s, "BTC")
         self.assertEqual(ivs, ["5m"])
 
-        s, ivs = parse_trend_args("BTC", is_agent=True)
+        s, ivs, *_ = parse_trend_args("BTC", is_agent=True)
         self.assertEqual(s, "BTC")
         self.assertEqual(ivs, ALL_INTERVALS)
 
         # 3. Full-width punctuation & multiple intervals
-        s, ivs = parse_trend_args("BTC 5m，15m、30m", is_agent=False)
+        s, ivs, *_ = parse_trend_args("BTC 5m，15m、30m", is_agent=False)
         self.assertEqual(s, "BTC")
         self.assertEqual(ivs, ["5m", "15m", "30m"])
 
-        s, ivs = parse_trend_args("ETH 15m／1h／4h", is_agent=False)
+        s, ivs, *_ = parse_trend_args("ETH 15m／1h／4h", is_agent=False)
         self.assertEqual(s, "ETH")
         self.assertEqual(ivs, ["15m", "1h", "4h"])
 
         # 4. Chinese interval names
-        s, ivs = parse_trend_args("SOL 15分钟，1小时、日线", is_agent=False)
+        s, ivs, *_ = parse_trend_args("SOL 15分钟，1小时、日线", is_agent=False)
         self.assertEqual(s, "SOL")
         self.assertEqual(ivs, ["15m", "1h", "1d"])
 
         # 5. All flag
-        s, ivs = parse_trend_args("BTC all", is_agent=False)
+        s, ivs, *_ = parse_trend_args("BTC all", is_agent=False)
         self.assertEqual(s, "BTC")
         self.assertEqual(ivs, ALL_INTERVALS)
 
@@ -229,6 +229,116 @@ class TestCryptoTrend(unittest.TestCase):
         if action.photo_url and os.path.exists(action.photo_url):
             try:
                 os.remove(action.photo_url)
+            except Exception:
+                pass
+
+    def test_personalization_settings_flow(self):
+        # 1. View settings
+        msg_dict = {
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "998877", "user_name": "trader"},
+            "request": {"command": "画线", "args": "设置", "is_agent": False}
+        }
+        rec_msg = RecordingMessage(msg_dict)
+        bot_execute(rec_msg, {})
+        self.assertEqual(len(rec_msg.outbox), 1)
+        self.assertIn("画线个性化看盘配置", rec_msg.outbox[0].text)
+
+        # 2. Set default symbol to PAXG
+        rec_msg = RecordingMessage({
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "998877", "user_name": "trader"},
+            "request": {"command": "画线", "args": "设置 标的 PAXG", "is_agent": False}
+        })
+        bot_execute(rec_msg, {})
+        self.assertIn("已将你的专属默认标的更新为: 【PAXG】", rec_msg.outbox[0].text)
+
+        # 3. Set default intervals to 4h
+        rec_msg = RecordingMessage({
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "998877", "user_name": "trader"},
+            "request": {"command": "画线设置", "args": "周期 4h", "is_agent": False}
+        })
+        bot_execute(rec_msg, {})
+        self.assertIn("已将你的专属默认周期更新为: 【4h】", rec_msg.outbox[0].text)
+
+        # 4. Set hybrid indicators
+        rec_msg = RecordingMessage({
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "998877", "user_name": "trader"},
+            "request": {"command": "画线", "args": "设置 指标 vegas ma200", "is_agent": False}
+        })
+        bot_execute(rec_msg, {})
+        self.assertIn("已将你的专属指标体系更新为", rec_msg.outbox[0].text)
+        self.assertIn("MA200", rec_msg.outbox[0].text)
+
+        # 5. Reset
+        rec_msg = RecordingMessage({
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "998877", "user_name": "trader"},
+            "request": {"command": "画线", "args": "设置 重置", "is_agent": False}
+        })
+        bot_execute(rec_msg, {})
+        self.assertIn("已重置你的画线个性化设置", rec_msg.outbox[0].text)
+
+    @patch("plugins.crypto_trend.fetch_gate_klines")
+    def test_on_the_fly_indicators_execution(self, mock_fetch):
+        mock_fetch.return_value = create_mock_kline_df(length=200, base_price=3000.0)
+
+        # On the fly: AIN 4h ema 20 ma 200
+        rec_msg = RecordingMessage({
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "8888", "user_name": "trader"},
+            "request": {"command": "画线", "args": "AIN 4h ema 20 ma 200", "is_agent": False}
+        })
+        bot_execute(rec_msg, {})
+        self.assertEqual(len(rec_msg.outbox), 1)
+        self.assertIn("AIN", rec_msg.outbox[0].text)
+        self.assertEqual(rec_msg.payload["symbol"], "AIN")
+        self.assertEqual(rec_msg.payload["interval"], "4h")
+        self.assertIn("EMA_20", rec_msg.payload["mas"])
+        self.assertIn("SMA_200", rec_msg.payload["mas"])
+
+        if rec_msg.outbox[0].photo_url and os.path.exists(rec_msg.outbox[0].photo_url):
+            try:
+                os.remove(rec_msg.outbox[0].photo_url)
+            except Exception:
+                pass
+
+    @patch("plugins.crypto_trend.fetch_gate_klines")
+    def test_user_preference_auto_application(self, mock_fetch):
+        mock_fetch.return_value = create_mock_kline_df(length=200, base_price=2700.0)
+
+        # 1. User configures default to PAXG and 4h
+        rec_msg = RecordingMessage({
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "auto_trader_77", "user_name": "trader"},
+            "request": {"command": "画线", "args": "设置 标的 PAXG", "is_agent": False}
+        })
+        bot_execute(rec_msg, {})
+
+        rec_msg = RecordingMessage({
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "auto_trader_77", "user_name": "trader"},
+            "request": {"command": "画线", "args": "设置 周期 4h", "is_agent": False}
+        })
+        bot_execute(rec_msg, {})
+
+        # 2. User just sends "画线" without arguments
+        rec_msg = RecordingMessage({
+            "frontend": "onebot",
+            "context": {"group_id": "1064595974", "user_id": "auto_trader_77", "user_name": "trader"},
+            "request": {"command": "画线", "args": "", "is_agent": False}
+        })
+        bot_execute(rec_msg, {})
+
+        self.assertEqual(rec_msg.payload["symbol"], "PAXG")
+        self.assertEqual(rec_msg.payload["interval"], "4h")
+        self.assertIn("PAXG", rec_msg.outbox[0].text)
+
+        if rec_msg.outbox[0].photo_url and os.path.exists(rec_msg.outbox[0].photo_url):
+            try:
+                os.remove(rec_msg.outbox[0].photo_url)
             except Exception:
                 pass
 

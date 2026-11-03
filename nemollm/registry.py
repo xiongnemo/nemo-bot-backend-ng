@@ -72,18 +72,22 @@ class ModelRegistry:
             else:
                 logger.warning(f"Unknown provider type '{ptype}' for provider '{name}'")
 
+    def _parse_model_id(self, model_id: str) -> Tuple[str, str]:
+        parts = model_id.split(":", 1)
+        if len(parts) == 2 and parts[0] in self.providers:
+            return parts[0], parts[1]
+        
+        # If parts[0] is not a registered provider, default to openai or the first available provider
+        default_provider = "openai" if "openai" in self.providers else (next(iter(self.providers.keys())) if self.providers else "openai")
+        return default_provider, model_id
+
     def get_models(self) -> list[Tuple[BaseLLMClient, str]]:
         """
         Return a list of (client, actual_model) tuples in order of fallback priority.
         """
         models = []
         for model_id in self.fallback_models:
-            parts = model_id.split(":", 1)
-            if len(parts) == 2:
-                provider_name, actual_model = parts
-            else:
-                provider_name, actual_model = "openai", model_id
-
+            provider_name, actual_model = self._parse_model_id(model_id)
             client = self.providers.get(provider_name)
             if client:
                 models.append((client, actual_model))
@@ -102,11 +106,7 @@ class ModelRegistry:
         """Report that a model call succeeded, promoting it to be tried first in subsequent calls."""
         models = []
         for model_id in self.fallback_models:
-            parts = model_id.split(":", 1)
-            if len(parts) == 2:
-                provider_name, mod = parts
-            else:
-                provider_name, mod = "openai", model_id
+            provider_name, mod = self._parse_model_id(model_id)
             c = self.providers.get(provider_name)
             if c:
                 models.append((c, mod))
@@ -120,12 +120,7 @@ class ModelRegistry:
 
     def get_client(self, model_id: str) -> Tuple[BaseLLMClient, str]:
         """Resolve a specific model_id (provider:model) to a client and actual model string."""
-        parts = model_id.split(":", 1)
-        if len(parts) == 2:
-            provider_name, actual_model = parts
-        else:
-            provider_name, actual_model = "openai", model_id
-            
+        provider_name, actual_model = self._parse_model_id(model_id)
         client = self.providers.get(provider_name)
         if not client:
             raise ValueError(f"Provider '{provider_name}' not found for model '{model_id}'")
